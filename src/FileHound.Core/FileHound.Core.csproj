@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="System.IO.Hashing" Version="10.0.0" />
+  </ItemGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="FileHound.Core.Tests" />
+    <InternalsVisibleTo Include="FileHound.Indexing" />
+    <InternalsVisibleTo Include="FileHound.Indexing.Tests" />
+  </ItemGroup>
+</Project>

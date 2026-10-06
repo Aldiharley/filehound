@@ -124,9 +124,31 @@ public class VolumeIndexTests
         var c = v.FindByRecord(100);
         Assert.Equal(@"C:\parent\child.txt", PathBuilder.GetFullPath(v, c));
         Assert.Equal(2, v.Depth(c));
-        Assert.False(v.IsLive(v.FindByRecord(200)));
+        Assert.Equal(-1, v.FindByRecord(200)); // orphans are dropped and unmapped
+        Assert.Equal(-1, v.FindByRecord(999));
         Assert.Equal(0, v.FindByRecord(5));
         Assert.Equal(2, v.LiveCount);
+    }
+
+    [Fact]
+    public void Rename_into_own_subtree_is_refused()
+    {
+        var v = Sample(out var docs, out var report);
+        int users = v.Parent(docs);
+        Assert.False(v.Rename(users, docs, "Users"));      // would create a cycle
+        Assert.False(v.Rename(docs, docs, "Docs"));
+        Assert.Equal(@"C:\Users\Docs\Report Final.PDF", PathBuilder.GetFullPath(v, report));
+        Assert.True(v.Rename(report, 0, "r.pdf"));
+    }
+
+    [Fact]
+    public void Rename_into_deleted_parent_deletes_entry()
+    {
+        var v = Sample(out var docs, out var report);
+        var tmp = v.Add(0, "tmp", EntryFlags.Directory, 0, 0);
+        v.Delete(tmp);
+        v.Rename(report, tmp, "gone.pdf");
+        Assert.False(v.IsLive(report));
     }
 
     [Fact]

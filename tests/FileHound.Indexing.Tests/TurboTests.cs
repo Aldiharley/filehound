@@ -39,6 +39,75 @@ public sealed class TurboTests : IDisposable
     }
 
     [Fact]
+    public void UsnUpdater_move_out_of_indexed_tree_deletes_entry()
+    {
+        // Mirrors an MFT build: $Recycle.Bin is skipped, so its SID folder (record 60) is an unmapped orphan.
+        var b = new VolumeIndexBuilder(@"Q:\", IndexMode.Turbo);
+        b.AddRecord(100, 5, "Docs", EntryFlags.Directory);
+        b.AddRecord(200, 100, "report.docx", 0);
+        b.AddRecord(60, 50, "S-1-5-21-1", EntryFlags.Directory); // parent 50 ($Recycle.Bin) was skipped
+        b.AddRecord(201, 100, "notes.txt", 0);
+        var index = b.Build();
+        Assert.Equal(-1, index.FindByRecord(60));
+        using var updater = new UsnUpdater(index, 'Q', TimeSpan.FromSeconds(1));
+        int report = index.FindByRecord(200);
+
+        // Explorer "Delete" = rename into the recycle bin folder.
+        updater.ApplyBuffer(UsnRecordParserTests.V2(200, 60, "$RAB12CD.docx", UsnReason.RenameNewName | UsnReason.Close));
+        Assert.False(index.IsLive(report));
+
+        // Moved into a folder we never saw (unknown parent) also leaves the tree.
+        int notes = index.FindByRecord(201);
+        updater.ApplyBuffer(UsnRecordParserTests.V2(201, 777, "notes.txt", UsnReason.RenameNewName | UsnReason.Close));
+        Assert.False(index.IsLive(notes));
+
+        // Creating a file under the recycle bin never adds it.
+        Assert.Equal(0, updater.ApplyBuffer(UsnRecordParserTests.V2(300, 60, "$IAB12CD.docx", UsnReason.FileCreate | UsnReason.Close)));
+        Assert.Equal(-1, index.FindByRecord(300));
+    }
+
+    [Fact]
+    public void UsnUpdater_ignores_cyclic_move()
+    {
+        var index = new VolumeIndex(@"Q:\", IndexMode.Turbo);
+        index.SetRecord(0, 5);
+        int a = index.Add(0, "a", EntryFlags.Directory, 0, 0, recordNo: 10);
+        int b = index.Add(a, "b", EntryFlags.Directory, 0, 0, recordNo: 11);
+        using var updater = new UsnUpdater(index, 'Q', TimeSpan.FromSeconds(1));
+        updater.ApplyBuffer(UsnRecordParserTests.V2(10, 11, "a", UsnReason.RenameNewName | UsnReason.Close)); // a into its own child
+        Assert.NotEqual(b, index.Parent(a)); // no cycle created (and no hang)
+        Assert.Equal(a, index.Parent(b));
+    }
+
+    [Fact]
+    public async Task MetadataFiller_only_incomplete_fills_missing_entries()
+    {
+        _t.File(@"a\one.bin", 10);
+        _t.File(@"b\two.bin", 20);
+        var b = new VolumeIndexBuilder(_t.Root, IndexMode.Turbo);
+        b.AddRecord(10, 5, "a", EntryFlags.Directory);
+        b.AddRecord(11, 10, "one.bin", 0);
+        b.AddRecord(20, 5, "b", EntryFlags.Directory);
+        b.AddRecord(21, 20, "two.bin", 0);
+        var index = b.Build();
+        index.Lock.EnterReadLock();
+        try
+        {
+            index.SetMetadata(index.FindByRecord(11), 999, 1); // "already filled" (deliberately wrong value)
+            index.SetMetadata(index.FindByRecord(10), 0, 1);
+            index.SetMetadata(index.FindByRecord(20), 0, 1);
+        }
+        finally { index.Lock.ExitReadLock(); }
+        Assert.True(MetadataFiller.HasIncompleteMetadata(index));
+
+        await new MetadataFiller().FillAsync(index, null, CancellationToken.None, onlyIncomplete: true);
+
+        Assert.Equal(999, index.Size(index.FindByRecord(11)));  // directory "a" was complete, so not revisited
+        Assert.Equal(20, index.Size(index.FindByRecord(21)));
+        Assert.False(MetadataFiller.HasIncompleteMetadata(index));
+    }
+
+    [Fact]
     public async Task MetadataFiller_fills_sizes_and_times()
     {
         _t.File(@"a\one.bin", 10);

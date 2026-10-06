@@ -51,6 +51,9 @@ public partial class App : Application
         _single = SingleInstance.Acquire(afterPid);
         if (!_single.IsFirst)
         {
+            if (_single.ElevatedInstanceRunning)
+                MessageBox.Show("FileHound is already running with Turbo indexing (as administrator).\n\nUse its tray icon or hotkey to open it.",
+                    "FileHound", MessageBoxButton.OK, MessageBoxImage.Information);
             _single.SignalFirstInstance();
             Shutdown();
             return;
@@ -101,6 +104,9 @@ public partial class App : Application
         }
         settingsVm.HotkeyStatus = hotkeyOk ? "✓ Registered" : "⚠ In use by another app — pick another combination";
         settingsVm.SuspendHotkey = () => _hotkey.Unregister();
+        settingsVm.ExclusionsChanged = paths => _manager.SetExcludedPaths(paths);
+        settingsVm.FuzzyChanged = on => searchVm.Fuzzy = on;   // property setters no-op when unchanged, so no loop
+        searchVm.FuzzyChanged = on => settingsVm.Fuzzy = on;
 
         CreateTray();
         main.Initialize();

@@ -53,7 +53,18 @@ public sealed partial class SettingsViewModel : ObservableObject
 
     partial void OnStartMinimizedChanged(bool value) { _settings.StartMinimized = value; _save(); }
     partial void OnCloseToTrayChanged(bool value) { _settings.CloseToTray = value; _save(); }
-    partial void OnFuzzyChanged(bool value) { _settings.Fuzzy = value; _save(); }
+    partial void OnFuzzyChanged(bool value)
+    {
+        _settings.Fuzzy = value;
+        _save();
+        FuzzyChanged?.Invoke(value);
+    }
+
+    /// <summary>Keeps the Search page's Fuzzy chip in sync.</summary>
+    public Action<bool>? FuzzyChanged { get; set; }
+
+    /// <summary>Pushes the excluded-folder list to the indexer (applied on the next scan).</summary>
+    public Action<IReadOnlyList<string>>? ExclusionsChanged { get; set; }
     partial void OnIncludeHiddenChanged(bool value) { _settings.IncludeHidden = value; _save(); }
 
     /// <summary>Called by the view while capturing; returns true when a valid combination was recorded.</summary>
@@ -64,8 +75,21 @@ public sealed partial class SettingsViewModel : ObservableObject
         IsCapturing = false;
         HotkeyText = gesture.ToString().Replace("+", " + ");
         bool ok = _applyHotkey(gesture);
-        HotkeyStatus = ok ? "✓ Registered" : "⚠ In use by another app — pick another combination";
-        if (ok) { _settings.Hotkey = gesture.ToString(); _save(); }
+        if (ok)
+        {
+            _settings.Hotkey = gesture.ToString();
+            _save();
+            HotkeyStatus = "✓ Registered";
+        }
+        else
+        {
+            // Keep the previous hotkey working rather than leaving none registered.
+            bool restored = HotkeyGesture.TryParse(_settings.Hotkey, out var previous) && _applyHotkey(previous);
+            HotkeyStatus = restored
+                ? $"⚠ {gesture} is in use by another app — kept {_settings.Hotkey}"
+                : "⚠ In use by another app — pick another combination";
+            if (restored) HotkeyText = _settings.Hotkey.Replace("+", " + ");
+        }
         return true;
     }
 
@@ -97,17 +121,21 @@ public sealed partial class SettingsViewModel : ObservableObject
         var path = dialog.FolderName.TrimEnd('\\');
         if (Excluded.Contains(path, StringComparer.OrdinalIgnoreCase)) return;
         Excluded.Add(path);
-        _settings.ExcludedPaths = Excluded.ToList();
-        _save();
-        ExcludesChanged = true;
+        SaveExclusions();
     }
 
     [RelayCommand]
     private void RemoveExcluded(string path)
     {
         Excluded.Remove(path);
+        SaveExclusions();
+    }
+
+    private void SaveExclusions()
+    {
         _settings.ExcludedPaths = Excluded.ToList();
         _save();
+        ExclusionsChanged?.Invoke(_settings.ExcludedPaths);
         ExcludesChanged = true;
     }
 

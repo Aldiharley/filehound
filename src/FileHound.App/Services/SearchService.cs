@@ -30,6 +30,12 @@ public sealed class SearchService(IndexManager manager)
         {
             return null;
         }
+        catch (Exception ex)
+        {
+            // Never let a search failure escape as an unobserved task exception or leave the UI "searching".
+            Log.Error($"Search failed for '{request.Text}'", ex);
+            return new SearchOutcome(SearchResult.Empty with { Errors = ["Search failed — see log for details"] }, []);
+        }
     }
 
     private static IReadOnlyList<ResultItem> Materialize(SearchResult result, CancellationToken ct)

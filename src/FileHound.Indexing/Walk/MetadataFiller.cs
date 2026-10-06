@@ -10,15 +10,36 @@ public sealed class MetadataFiller
 {
     private readonly record struct Meta(string Name, long Length, long ModifiedTicks, bool IsDirectory);
 
-    public async Task FillAsync(VolumeIndex index, IProgress<double>? progress, CancellationToken ct)
+    /// <summary>True when any live entry still lacks size/date (e.g. a snapshot saved while filling).</summary>
+    public static bool HasIncompleteMetadata(VolumeIndex index)
+    {
+        index.Lock.EnterReadLock();
+        try
+        {
+            for (int e = 1; e < index.Count; e++)
+                if (index.IsLive(e) && (index.Flags(e) & EntryFlags.MetadataKnown) == 0) return true;
+            return false;
+        }
+        finally { index.Lock.ExitReadLock(); }
+    }
+
+    /// <param name="onlyIncomplete">Visit only directories that have live children without metadata.</param>
+    public async Task FillAsync(VolumeIndex index, IProgress<double>? progress, CancellationToken ct, bool onlyIncomplete = false)
     {
         var dirs = new List<int>();
         index.Lock.EnterReadLock();
         try
         {
-            if (index.FirstChild(VolumeIndex.RootEntry) > 0) dirs.Add(VolumeIndex.RootEntry);
+            bool[]? needs = null;
+            if (onlyIncomplete)
+            {
+                needs = new bool[index.Count];
+                for (int e = 1; e < index.Count; e++)
+                    if (index.IsLive(e) && (index.Flags(e) & EntryFlags.MetadataKnown) == 0) needs[index.Parent(e)] = true;
+            }
+            if (index.FirstChild(VolumeIndex.RootEntry) > 0 && (needs is null || needs[VolumeIndex.RootEntry])) dirs.Add(VolumeIndex.RootEntry);
             for (int e = 1; e < index.Count; e++)
-                if (index.IsLive(e) && index.IsDirectory(e) && (index.Flags(e) & EntryFlags.ReparsePoint) == 0)
+                if (index.IsLive(e) && index.IsDirectory(e) && (index.Flags(e) & EntryFlags.ReparsePoint) == 0 && (needs is null || needs[e]))
                     dirs.Add(e);
         }
         finally { index.Lock.ExitReadLock(); }

@@ -60,12 +60,21 @@ public static class DateRangeParser
     {
         start = end = default;
         var inv = CultureInfo.InvariantCulture;
-        if (DateTime.TryParseExact(s, "yyyy-MM-dd", inv, DateTimeStyles.None, out var d)) { start = d; end = d.AddDays(1); return true; }
-        if (DateTime.TryParseExact(s, "yyyy-MM", inv, DateTimeStyles.None, out d)) { start = d; end = d.AddMonths(1); return true; }
-        if (s.Length == 4 && DateTime.TryParseExact(s, "yyyy", inv, DateTimeStyles.None, out d)) { start = d; end = d.AddYears(1); return true; }
+        try
+        {
+            if (DateTime.TryParseExact(s, "yyyy-MM-dd", inv, DateTimeStyles.None, out var d)) { start = d; end = d.AddDays(1); return true; }
+            if (DateTime.TryParseExact(s, "yyyy-MM", inv, DateTimeStyles.None, out d)) { start = d; end = d.AddMonths(1); return true; }
+            if (s.Length == 4 && DateTime.TryParseExact(s, "yyyy", inv, DateTimeStyles.None, out d)) { start = d; end = d.AddYears(1); return true; }
+        }
+        catch (ArgumentOutOfRangeException)
+        {
+            // End of the calendar (year 9999): the period's end is unrepresentable.
+            end = DateTime.MaxValue;
+            return start != default;
+        }
         return false;
     }
 
     private static long ToUtc(DateTime local) =>
-        DateTime.SpecifyKind(local, DateTimeKind.Local).ToUniversalTime().Ticks;
+        local == DateTime.MaxValue ? long.MaxValue : DateTime.SpecifyKind(local, DateTimeKind.Local).ToUniversalTime().Ticks;
 }

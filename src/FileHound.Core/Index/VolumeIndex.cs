@@ -130,13 +130,19 @@ public sealed class VolumeIndex
         finally { Lock.ExitWriteLock(); }
     }
 
-    /// <summary>Renames and/or moves an entry. Descendant depths are updated on move.</summary>
-    public void Rename(int e, int newParent, ReadOnlySpan<char> newName)
+    /// <summary>
+    /// Renames and/or moves an entry; descendant depths are updated on move. Returns false (and changes nothing)
+    /// when the move would make the entry its own ancestor (possible with stale or out-of-order change records).
+    /// Moving into a deleted parent deletes the entry: the item left the indexed tree (e.g. into the Recycle Bin).
+    /// </summary>
+    public bool Rename(int e, int newParent, ReadOnlySpan<char> newName)
     {
         Lock.EnterWriteLock();
         try
         {
             if (e <= 0 || e >= _count) throw new ArgumentOutOfRangeException(nameof(e));
+            if ((uint)newParent >= (uint)_count) throw new ArgumentOutOfRangeException(nameof(newParent));
+            if (newParent != _parent[e] && IsSelfOrAncestor(e, newParent)) return false;
             if (!Name(e).SequenceEqual(newName))
             {
                 int start = AppendName(newName);
@@ -153,10 +159,21 @@ public sealed class VolumeIndex
                 LinkChild(newParent, e);
                 _depth[e] = (byte)Math.Min(255, _depth[newParent] + 1);
                 RecomputeSubtreeDepth(e);
+                if ((_flags[newParent] & EntryFlags.Deleted) != 0) MarkDeletedSubtree(e);
             }
             _dirty = true;
+            return true;
         }
         finally { Lock.ExitWriteLock(); }
+    }
+
+    /// <summary>True when <paramref name="e"/> is <paramref name="candidate"/> or one of its ancestors (candidate lies in e's subtree).</summary>
+    private bool IsSelfOrAncestor(int e, int candidate)
+    {
+        int guard = 0;
+        for (int x = candidate; x >= 0 && guard++ < MaxChainLength; x = _parent[x])
+            if (x == e) return true;
+        return false;
     }
 
     /// <summary>Marks an entry (and, for directories, its whole subtree) deleted.</summary>
@@ -384,6 +401,19 @@ public sealed class VolumeIndex
     }
 
     internal void SetLiveCountForLoad(int live) => _liveCount = live;
+
+    /// <summary>Removes record-number mappings of deleted entries (e.g. orphans), so change-journal records never resolve to them.</summary>
+    internal void UnmapDeletedRecords()
+    {
+        if (_entryRecord is null || _recordMap is null) return;
+        for (int e = 1; e < _count; e++)
+        {
+            if ((_flags[e] & EntryFlags.Deleted) == 0) continue;
+            long rec = _entryRecord[e];
+            if (rec >= 0 && rec < _recordMap.Length && _recordMap[rec] == e + 1) _recordMap[rec] = 0;
+            _entryRecord[e] = -1;
+        }
+    }
 
     // raw array access for the snapshot serializer
     internal int[] ParentArray => _parent;

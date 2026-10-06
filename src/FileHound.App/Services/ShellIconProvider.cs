@@ -9,7 +9,7 @@ using System.Windows.Media.Imaging;
 namespace FileHound.App.Services;
 
 /// <summary>
-/// Small shell icons for result rows. Most files share one icon per extension (cached forever);
+/// Shell icons for result rows (32 px "large" icons, displayed at 24 px for crispness on high DPI). Most files share one icon per extension (cached forever);
 /// executables, shortcuts and icon files get per-path icons (LRU-ish bounded cache).
 /// </summary>
 public sealed class ShellIconProvider

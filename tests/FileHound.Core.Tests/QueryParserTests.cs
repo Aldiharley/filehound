@@ -166,6 +166,17 @@ public class QueryParserTests
 
     [Fact] public void Dm_garbage_fails() => Assert.False(DateRangeParser.TryParse("someday", Clock, out _, out _));
 
+    [Theory]
+    [InlineData("9999")]
+    [InlineData("9999-12")]
+    [InlineData("9999-12-31")]
+    [InlineData(">9999-12-31")]
+    public void Dm_end_of_calendar_does_not_throw(string s)
+    {
+        var ex = Record.Exception(() => QueryParser.Parse("dm:" + s, Clock));
+        Assert.Null(ex);
+    }
+
     [Fact] public void Drive_filter() => Assert.Equal('E', ((DriveFilter)F(QueryParser.Parse("drive:e:"), 0)).Letter);
 
     [Fact]

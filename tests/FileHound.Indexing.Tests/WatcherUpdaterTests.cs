@@ -46,6 +46,41 @@ public sealed class WatcherUpdaterTests : IDisposable
     }
 
     [Fact]
+    public async Task Paused_watcher_queues_changes_until_resumed()
+    {
+        _t.File(@"docs\a.txt");
+        var index = new VolumeIndex(_t.Root, IndexMode.Standard);
+        var walker = new DirectoryWalker([], 2);
+        using var updater = new WatcherUpdater(index, _t.Root, walker, TimeSpan.FromMilliseconds(100));
+        updater.Start(paused: true);
+        var during = _t.File(@"docs\made-during-walk.txt"); // the walk below may or may not see it
+        await walker.WalkAsync(index, _t.Root, 0, null, CancellationToken.None);
+        File.Delete(_t.Path(@"docs\a.txt"));                  // happens "after the walk read it"
+        Thread.Sleep(400);
+        Assert.True(index.FindByPath(_t.Path(@"docs\a.txt")) > 0); // still paused: nothing applied
+        updater.Resume();
+        TempTree.WaitUntil(() => index.FindByPath(_t.Path(@"docs\a.txt")) < 0, because: "queued delete applied");
+        Assert.True(index.FindByPath(during) > 0);
+        int docs = index.FindByPath(_t.Path("docs"));
+        int count = 0;
+        for (int c = index.FirstChild(docs); c > 0; c = index.NextSibling(c)) if (index.IsLive(c)) count++;
+        Assert.Equal(1, count); // no duplicate of the file created during the walk
+    }
+
+    [Fact]
+    public async Task Rename_out_of_tree_deletes_entry()
+    {
+        var f = _t.File(@"docs\leaving.txt");
+        var index = new VolumeIndex(_t.Root, IndexMode.Standard);
+        var walker = new DirectoryWalker([], 2);
+        await walker.WalkAsync(index, _t.Root, 0, null, CancellationToken.None);
+        using var updater = new WatcherUpdater(index, _t.Root, walker, TimeSpan.FromMilliseconds(100));
+        updater.Start();
+        File.Move(f, _outside.Path("left.txt"));
+        TempTree.WaitUntil(() => index.FindByPath(f) < 0, because: "moved out of the watched tree");
+    }
+
+    [Fact]
     public async Task Directory_created_in_place_with_children_has_no_duplicates()
     {
         var index = new VolumeIndex(_t.Root, IndexMode.Standard);

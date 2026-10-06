@@ -34,22 +34,36 @@ public sealed class WatcherUpdater : IDisposable
     /// <summary>Raised when the OS dropped events; the index may be stale until rescanned.</summary>
     public event EventHandler? Overflowed;
 
-    public void Start()
+    private volatile bool _paused;
+
+    /// <summary>
+    /// Starts watching. When <paramref name="paused"/> is true, changes are only queued until <see cref="Resume"/>
+    /// (used to capture changes made while the initial walk is still running).
+    /// </summary>
+    public void Start(bool paused = false)
     {
+        _paused = paused;
         _watcher = new FileSystemWatcher(_rootPath)
         {
             IncludeSubdirectories = true,
-            InternalBufferSize = 64 * 1024,
+            InternalBufferSize = 256 * 1024,
             NotifyFilter = NotifyFilters.FileName | NotifyFilters.DirectoryName | NotifyFilters.Size | NotifyFilters.LastWrite | NotifyFilters.Attributes,
         };
         _watcher.Created += (_, e) => _queue.Enqueue(new Change(Kind.Created, e.FullPath, null));
         _watcher.Deleted += (_, e) => _queue.Enqueue(new Change(Kind.Deleted, e.FullPath, null));
         _watcher.Changed += (_, e) => _queue.Enqueue(new Change(Kind.Changed, e.FullPath, null));
         _watcher.Renamed += (_, e) => _queue.Enqueue(new Change(Kind.Renamed, e.FullPath, e.OldFullPath));
-        _watcher.Error += (_, _) => Overflowed?.Invoke(this, EventArgs.Empty);
+        _watcher.Error += (_, e) =>
+        {
+            // Only a lost-events overflow makes the index stale; while paused the walk is still reading the disk anyway.
+            if (!_paused && e.GetException() is InternalBufferOverflowException) Overflowed?.Invoke(this, EventArgs.Empty);
+        };
         _watcher.EnableRaisingEvents = true;
         _loop = Task.Run(LoopAsync);
     }
+
+    /// <summary>Starts applying changes, beginning with everything queued while paused.</summary>
+    public void Resume() => _paused = false;
 
     private async Task LoopAsync()
     {
@@ -58,7 +72,7 @@ public sealed class WatcherUpdater : IDisposable
         {
             while (await timer.WaitForNextTickAsync(_cts.Token).ConfigureAwait(false))
             {
-                if (_queue.IsEmpty) continue;
+                if (_paused || _queue.IsEmpty) continue;
                 bool changed = false;
                 var walks = new List<(string Path, int Entry)>(1);
                 while (_queue.TryDequeue(out var c))
@@ -100,7 +114,13 @@ public sealed class WatcherUpdater : IDisposable
                 int newParent = _index.FindByPath(Path.GetDirectoryName(c.Path) ?? string.Empty);
                 if (e > 0 && newParent >= 0)
                 {
-                    _index.Rename(e, newParent, Path.GetFileName(c.Path));
+                    if (!_index.Rename(e, newParent, Path.GetFileName(c.Path))) _index.Delete(e); // impossible move: drop it
+                    return true;
+                }
+                if (e > 0)
+                {
+                    // Moved somewhere we don't index: it's gone from the indexed tree.
+                    _index.Delete(e);
                     return true;
                 }
                 return Upsert(c.Path, walks);

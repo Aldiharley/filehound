@@ -109,6 +109,43 @@ public sealed class IndexManagerTests : IDisposable
     }
 
     [Fact]
+    public async Task Rescan_keeps_previous_index_searchable_and_coalesces()
+    {
+        for (int i = 0; i < 300; i++) _tree.File($@"d{i % 30}\file{i}.txt");
+        _tree.File("keeper.txt");
+        await using var m = new IndexManager(Options());
+        await m.StartAsync();
+        await m.WaitForIdleAsync();
+        Assert.Equal(1, Count(m, "keeper.txt"));
+
+        // Several concurrent rescans (as from overflow bursts + the user) must not race or leak.
+        var rescans = Enumerable.Range(0, 5).Select(_ => Task.Run(() => m.RescanAsync('Z'))).ToArray();
+        Assert.Equal(1, Count(m, "keeper.txt")); // still searchable while rescanning
+        await Task.WhenAll(rescans);
+        Assert.Equal(1, Count(m, "keeper.txt"));
+        await m.WaitForIdleAsync();
+        Assert.Equal(DriveStatus.Ready, m.Drives.Single().Status);
+        Assert.Equal(1, Count(m, "keeper.txt"));
+
+        _tree.File("after.txt");
+        TempTree.WaitUntil(() => Count(m, "after.txt") == 1, 4000, "live updates still attached after rescans");
+    }
+
+    [Fact]
+    public async Task Exclusions_can_change_at_runtime()
+    {
+        _tree.File(@"secret\hidden-plan.txt");
+        await using var m = new IndexManager(Options());
+        await m.StartAsync();
+        await m.WaitForIdleAsync();
+        Assert.Equal(1, Count(m, "hidden-plan"));
+        m.SetExcludedPaths([_tree.Path("secret")]);
+        await m.RescanAsync('Z');
+        await m.WaitForIdleAsync();
+        Assert.Equal(0, Count(m, "hidden-plan"));
+    }
+
+    [Fact]
     public async Task Rescan_rebuilds_index()
     {
         await using var m = new IndexManager(Options());

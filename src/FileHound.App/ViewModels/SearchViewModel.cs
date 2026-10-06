@@ -73,8 +73,12 @@ public sealed partial class SearchViewModel : ObservableObject
     {
         _settings.Fuzzy = value;
         _saveSettings();
+        FuzzyChanged?.Invoke(value);
         _ = RunAsync(debounce: 0);
     }
+
+    /// <summary>Keeps the Settings page's Fuzzy toggle in sync.</summary>
+    public Action<bool>? FuzzyChanged { get; set; }
 
     private void OnChip(ChipItem<FileHound.Core.Index.FileCategory?> chip)
     {
@@ -101,11 +105,25 @@ public sealed partial class SearchViewModel : ObservableObject
         if (index >= 0 && index < Chips.Count) Chips[index].IsSelected = true;
     }
 
+    private bool _refreshScheduled;
+
     private void OnIndexChanged()
     {
         UpdateIndexingNotice();
         if (IsEmptyQuery && _category is null) return;
-        if (DateTime.UtcNow - _lastLiveRefresh < TimeSpan.FromSeconds(1)) return;
+        var wait = TimeSpan.FromSeconds(1) - (DateTime.UtcNow - _lastLiveRefresh);
+        if (wait > TimeSpan.Zero)
+        {
+            // Defer (rather than drop) so the last burst of changes still shows up.
+            if (_refreshScheduled) return;
+            _refreshScheduled = true;
+            _ = Task.Delay(wait).ContinueWith(_ => Application.Current?.Dispatcher.InvokeAsync(() =>
+            {
+                _refreshScheduled = false;
+                OnIndexChanged();
+            }), TaskScheduler.Default);
+            return;
+        }
         _lastLiveRefresh = DateTime.UtcNow;
         _ = RunAsync(debounce: 0, keepSelection: true);
     }

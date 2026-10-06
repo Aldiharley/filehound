@@ -13,7 +13,12 @@ public sealed class MftScanner
 {
     private const long RootRecord = 5;
     private const uint FSCTL_GET_NTFS_VOLUME_DATA = 0x00090064;
-    private static readonly HashSet<string> s_skipRootNames = new(StringComparer.OrdinalIgnoreCase) { "$Recycle.Bin", "System Volume Information" };
+    // NTFS metafiles live at the root; real folders like "$WINDOWS.~BT" or "$SysReset" are indexed normally.
+    private static readonly string[] s_skipRootNames =
+    [
+        "$MFT", "$MFTMirr", "$LogFile", "$Volume", "$AttrDef", "$Bitmap", "$Boot", "$BadClus", "$Secure", "$UpCase", "$Extend",
+        "$Recycle.Bin", "System Volume Information",
+    ];
 
     public static unsafe bool TryQueryJournal(char letter, out ulong journalId, out long firstUsn, out long nextUsn)
     {
@@ -37,7 +42,9 @@ public sealed class MftScanner
 
         long totalRecords = EstimateRecordCount(h);
         var builder = new VolumeIndexBuilder(drive.Root, IndexMode.Turbo, (int)Math.Clamp(totalRecords, 1 << 16, 1 << 26));
-        var med = new MftEnumDataV1 { StartFileReferenceNumber = 0, LowUsn = 0, HighUsn = jd.NextUsn, MinMajorVersion = 2, MaxMajorVersion = 3 };
+        // HighUsn = max so records changed during the scan are still enumerated; the USN updater then replays
+        // from the NextUsn captured above (its upserts are idempotent).
+        var med = new MftEnumDataV1 { StartFileReferenceNumber = 0, LowUsn = 0, HighUsn = long.MaxValue, MinMajorVersion = 2, MaxMajorVersion = 3 };
         const int BufferSize = 1 << 20;
         byte* buffer = (byte*)NativeMemory.Alloc(BufferSize);
         try
@@ -58,10 +65,9 @@ public sealed class MftScanner
                 while (UsnRecordParser.TryRead(span, out var rec))
                 {
                     span = span[rec.Length..];
-                    // Root-level NTFS metafiles ($MFT, $Extend, ...), $Recycle.Bin and System Volume Information are
-                    // skipped; their children become orphans and are dropped by the builder.
-                    if (rec.ParentRecordNo == RootRecord && rec.Name.Length > 0 && (rec.Name[0] == '$' || IsSkippedRootName(rec.Name)))
-                        continue;
+                    // Root-level NTFS metafiles, $Recycle.Bin and System Volume Information are skipped; their
+                    // children become orphans and are dropped (and unmapped) by the builder.
+                    if (rec.ParentRecordNo == RootRecord && IsSkippedRootName(rec.Name)) continue;
                     builder.AddRecord(rec.RecordNo, rec.ParentRecordNo, rec.Name, EntryFlagsExtensions.FromAttributes(rec.Attributes));
                 }
                 if (progress is not null && Environment.TickCount64 - lastReport > 200)
@@ -88,7 +94,8 @@ public sealed class MftScanner
         return v;
     }
 
-    private static bool IsSkippedRootName(ReadOnlySpan<char> name)
+    /// <summary>True for root-level names FileHound never indexes (NTFS metafiles, recycle bin, restore points).</summary>
+    internal static bool IsSkippedRootName(ReadOnlySpan<char> name)
     {
         foreach (var s in s_skipRootNames) if (name.Equals(s, StringComparison.OrdinalIgnoreCase)) return true;
         return false;

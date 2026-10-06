@@ -127,6 +127,27 @@ public class SearchEngineTests
     }
 
     [Fact]
+    public async Task Name_sort_is_safe_under_concurrent_renames()
+    {
+        var v = new VolumeIndex(@"C:\", IndexMode.Standard);
+        var ids = new List<int>();
+        for (int i = 0; i < 50_000; i++) ids.Add(v.Add(0, $"file{i}.txt", EntryFlags.MetadataKnown, i, i));
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+        var writer = Task.Run(() =>
+        {
+            int n = 0;
+            while (!cts.IsCancellationRequested) v.Rename(ids[n++ % ids.Count], 0, $"renamed_file_with_a_longer_name_{n}.txt");
+        });
+        var engine = new SearchEngine();
+        while (!cts.IsCancellationRequested)
+        {
+            var r = engine.Search([v], new SearchRequest("file", SortMode.Name, MaxResults: 200));
+            Assert.True(r.Hits.Count > 0);
+        }
+        await writer;
+    }
+
+    [Fact]
     public void Cancellation_throws()
     {
         using var cts = new CancellationTokenSource();

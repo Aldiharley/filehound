@@ -49,6 +49,7 @@ public sealed class VolumeIndexBuilder
             parents[e] = p; // -1 => orphan, handled by FinalizeStructure
         }
         v.FinalizeStructure(parents);
+        v.UnmapDeletedRecords();
         v.TrimExcess();
         v.IsDirty = true;
         return v;

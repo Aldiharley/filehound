@@ -54,6 +54,30 @@ public sealed class SearchEngine(IClock? clock = null)
     private (IReadOnlyList<SearchHit> Hits, int Total) Run<TRanker>(IReadOnlyList<VolumeIndex> volumes, SearchQuery query, SearchRequest request, bool typo, CancellationToken ct)
         where TRanker : struct, IRanker<SearchHit>
     {
+        // NameRanker reads name arrays while comparing hits, including hits from volumes whose chunk lock the
+        // comparing thread doesn't hold, and during the final merge. Hold read locks on every volume for the
+        // whole run so renames can't swap name arrays underneath it.
+        bool lockAll = typeof(TRanker) == typeof(NameRanker);
+        var locked = new List<VolumeIndex>();
+        try
+        {
+            if (lockAll)
+                foreach (var v in volumes.Distinct())
+                {
+                    v.Lock.EnterReadLock();
+                    locked.Add(v);
+                }
+            return RunCore<TRanker>(volumes, query, request, typo, chunkLocks: !lockAll, ct);
+        }
+        finally
+        {
+            foreach (var v in locked) v.Lock.ExitReadLock();
+        }
+    }
+
+    private (IReadOnlyList<SearchHit> Hits, int Total) RunCore<TRanker>(IReadOnlyList<VolumeIndex> volumes, SearchQuery query, SearchRequest request, bool typo, bool chunkLocks, CancellationToken ct)
+        where TRanker : struct, IRanker<SearchHit>
+    {
         var chunks = new List<Chunk>();
         bool needsMemo = query.Clauses.Exists(c => c.HasPath);
         foreach (var v in volumes)
@@ -74,7 +98,9 @@ public sealed class SearchEngine(IClock? clock = null)
             {
                 var chunk = chunks[i];
                 var v = chunk.Volume;
-                v.Lock.EnterReadLock();
+                // Workers must not take read locks when the caller already holds them: a waiting writer would
+                // block the new readers behind the caller's locks (ReaderWriterLockSlim favours writers).
+                if (chunkLocks) v.Lock.EnterReadLock();
                 try
                 {
                     int end = Math.Min(chunk.End, v.Count);
@@ -88,7 +114,7 @@ public sealed class SearchEngine(IClock? clock = null)
                         }
                     }
                 }
-                finally { v.Lock.ExitReadLock(); }
+                finally { if (chunkLocks) v.Lock.ExitReadLock(); }
                 return local;
             },
             locals.Add);

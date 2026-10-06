@@ -108,13 +108,20 @@ public sealed class UsnUpdater : IDisposable
                 if ((rec.Reason & (UsnReason.FileCreate | UsnReason.RenameNewName)) != 0 || e <= 0)
                 {
                     int parent = rec.ParentRecordNo == RootRecord ? VolumeIndex.RootEntry : _index.FindByRecord(rec.ParentRecordNo);
-                    if (parent < 0) continue; // parent not indexed (metafile area or excluded)
-                    if (rec.ParentRecordNo == RootRecord && rec.Name.Length > 0 && rec.Name[0] == '$') continue;
-                    var flags = EntryFlagsExtensions.FromAttributes(rec.Attributes);
-                    if (e > 0 && _index.IsLive(e))
+                    bool parentIndexed = parent == VolumeIndex.RootEntry || _index.IsLive(parent);
+                    bool skippedName = rec.ParentRecordNo == RootRecord && MftScanner.IsSkippedRootName(rec.Name);
+                    if (!parentIndexed || skippedName)
                     {
-                        _index.Rename(e, parent, rec.Name);
-                        _index.SetAttributes(e, flags);
+                        // Created or moved outside the indexed tree (Recycle Bin, metafile area, excluded folder):
+                        // if we knew the item, it has left the tree.
+                        if (_index.IsLive(e)) { _index.Delete(e); changes++; }
+                        continue;
+                    }
+                    var flags = EntryFlagsExtensions.FromAttributes(rec.Attributes);
+                    if (_index.IsLive(e))
+                    {
+                        if (_index.Rename(e, parent, rec.Name)) _index.SetAttributes(e, flags);
+                        else _index.Delete(e); // out-of-order nested move would create a cycle; drop it
                     }
                     else
                     {

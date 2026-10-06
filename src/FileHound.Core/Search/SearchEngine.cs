@@ -40,13 +40,19 @@ public sealed class SearchEngine(IClock? clock = null)
 
     private readonly record struct Chunk(VolumeIndex Volume, int Start, int End, PathMemo? Memo);
 
-    private sealed class LocalState(int capacity, Comparison<SearchHit> better)
+    private sealed class LocalState<TRanker>(int capacity) where TRanker : struct, IRanker<SearchHit>
     {
-        public readonly BoundedHeap<SearchHit> Heap = new(capacity, better);
+        public readonly BoundedHeap<SearchHit, TRanker> Heap = new(capacity, default);
         public int Count;
     }
 
-    private (IReadOnlyList<SearchHit> Hits, int Total) Run(IReadOnlyList<VolumeIndex> volumes, SearchQuery query, SearchRequest request, bool typo, CancellationToken ct)
+    private (IReadOnlyList<SearchHit> Hits, int Total) Run(IReadOnlyList<VolumeIndex> volumes, SearchQuery query, SearchRequest request, bool typo, CancellationToken ct) =>
+        request.Sort == SortMode.Name
+            ? Run<NameRanker>(volumes, query, request, typo, ct)
+            : Run<KeyRanker>(volumes, query, request, typo, ct);
+
+    private (IReadOnlyList<SearchHit> Hits, int Total) Run<TRanker>(IReadOnlyList<VolumeIndex> volumes, SearchQuery query, SearchRequest request, bool typo, CancellationToken ct)
+        where TRanker : struct, IRanker<SearchHit>
     {
         var chunks = new List<Chunk>();
         bool needsMemo = query.Clauses.Exists(c => c.HasPath);
@@ -57,14 +63,13 @@ public sealed class SearchEngine(IClock? clock = null)
             for (int s = 1; s < count; s += ChunkSize) chunks.Add(new Chunk(v, s, Math.Min(count, s + ChunkSize), memo));
         }
 
-        var better = Comparer(request.Sort);
         int capacity = Math.Max(1, request.MaxResults);
-        var locals = new ConcurrentBag<LocalState>();
+        var locals = new ConcurrentBag<LocalState<TRanker>>();
         var ctx = new EvalContext(query, request, typo);
         var options = new ParallelOptions { CancellationToken = ct, MaxDegreeOfParallelism = Environment.ProcessorCount };
 
         Parallel.For(0, chunks.Count, options,
-            () => new LocalState(capacity, better),
+            () => new LocalState<TRanker>(capacity),
             (i, _, local) =>
             {
                 var chunk = chunks[i];
@@ -89,15 +94,13 @@ public sealed class SearchEngine(IClock? clock = null)
             locals.Add);
 
         int total = 0;
-        var all = new List<SearchHit>();
+        var merged = new BoundedHeap<SearchHit, TRanker>(capacity, default);
         foreach (var l in locals)
         {
             total += l.Count;
-            all.AddRange(l.Heap.Items);
+            foreach (ref readonly var hit in l.Heap.Items) merged.Offer(hit);
         }
-        all.Sort((a, b) => better(b, a));
-        if (all.Count > capacity) all.RemoveRange(capacity, all.Count - capacity);
-        return (all, total);
+        return (merged.ToSortedList(), total);
     }
 
     private sealed class EvalContext(SearchQuery query, SearchRequest request, bool typo)
@@ -225,23 +228,24 @@ public sealed class SearchEngine(IClock? clock = null)
         return (t << 52) | (sc << 40) | (nb << 39) | (len << 31) | (depth << 23) | days;
     }
 
-    private static Comparison<SearchHit> Comparer(SortMode sort)
+    /// <summary>Higher packed key ranks better (relevance, size and modified sorts).</summary>
+    private struct KeyRanker : IRanker<SearchHit>
     {
-        if (sort == SortMode.Name)
-        {
-            return static (a, b) =>
-            {
-                // "Better" = alphabetically earlier.
-                int c = b.Volume.FoldName(b.Entry).SequenceCompareTo(a.Volume.FoldName(a.Entry));
-                if (c != 0) return c;
-                return TieBreak(a, b);
-            };
-        }
-        return static (a, b) =>
+        public readonly int Better(in SearchHit a, in SearchHit b)
         {
             int c = a.Key.CompareTo(b.Key);
             return c != 0 ? c : TieBreak(a, b);
-        };
+        }
+    }
+
+    /// <summary>Alphabetically earlier (case-insensitive) ranks better.</summary>
+    private struct NameRanker : IRanker<SearchHit>
+    {
+        public readonly int Better(in SearchHit a, in SearchHit b)
+        {
+            int c = b.Volume.FoldName(b.Entry).SequenceCompareTo(a.Volume.FoldName(a.Entry));
+            return c != 0 ? c : TieBreak(a, b);
+        }
     }
 
     /// <summary>Deterministic ordering: earlier drive letter, then lower entry id ranks higher.</summary>

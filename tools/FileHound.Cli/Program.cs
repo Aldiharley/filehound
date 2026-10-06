@@ -24,6 +24,39 @@ string command = argList[0].ToLowerInvariant();
 var rest = argList.Skip(1).ToList();
 if (command == "scan" && rest.Count > 0) drivesOpt = rest.Select(s => char.ToUpperInvariant(s[0])).ToHashSet();
 
+if (command == "turbo-validate")
+{
+    // filehound-cli turbo-validate C --report <file> --data <dir>   (must run elevated)
+    char letter = char.ToUpperInvariant((rest.FirstOrDefault() ?? "C")[0]);
+    string report = TakeOption(argList, "--report") ?? Path.Combine(Path.GetTempPath(), "filehound-turbo-report.txt");
+    string turboData = Path.Combine(Path.GetTempPath(), "fh-turbo-validate");
+    return await TurboValidation.RunAsync(letter, turboData, report);
+}
+
+if (command == "turbo-bench")
+{
+    // filehound-cli turbo-bench C --report <file>   (must run elevated): times MFT scans with a breakdown
+    char letter = char.ToUpperInvariant((rest.FirstOrDefault() ?? "C")[0]);
+    string report = TakeOption(argList, "--report") ?? Path.Combine(Path.GetTempPath(), "filehound-turbo-bench.txt");
+    var lines = new List<string> { $"elevated={Elevation.IsElevated}" };
+    try
+    {
+        var drive = DriveDiscovery.GetDrives().Single(d => d.Letter == letter);
+        for (int run = 1; run <= 3; run++)
+        {
+            var scanner = new FileHound.Indexing.Ntfs.MftScanner();
+            var swb = Stopwatch.StartNew();
+            var v = scanner.Scan(drive, [], null, CancellationToken.None);
+            lines.Add($"run {run}: {v.LiveCount:N0} entries in {swb.Elapsed.TotalSeconds:F2}s  (ioctl {scanner.IoTime.TotalSeconds:F2}s, parse+add {scanner.ParseTime.TotalSeconds:F2}s, build {scanner.BuildTime.TotalSeconds:F2}s)");
+            var swf = Stopwatch.StartNew();
+            if (run == 1) { await new MetadataFiller().FillAsync(v, null, CancellationToken.None); lines.Add($"run {run}: metadata fill {swf.Elapsed.TotalSeconds:F2}s"); }
+        }
+    }
+    catch (Exception ex) { lines.Add("error: " + ex); }
+    File.WriteAllLines(report, lines);
+    return 0;
+}
+
 if (command == "rawwalk")
 {
     // Baseline: parallel enumeration only (no index), to separate filesystem cost from indexing cost.

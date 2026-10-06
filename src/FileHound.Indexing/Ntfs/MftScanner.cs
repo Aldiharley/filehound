@@ -31,8 +31,14 @@ public sealed class MftScanner
         return true;
     }
 
+    /// <summary>Timing breakdown of the last <see cref="Scan"/> (diagnostics).</summary>
+    public TimeSpan IoTime { get; private set; }
+    public TimeSpan ParseTime { get; private set; }
+    public TimeSpan BuildTime { get; private set; }
+
     public unsafe VolumeIndex Scan(DriveDescriptor drive, IReadOnlyCollection<string> excluded, IProgress<ScanProgress>? progress, CancellationToken ct)
     {
+        long ioTicks = 0, parseTicks = 0;
         using var h = Kernel32.OpenVolume(drive.Letter);
         if (h.IsInvalid) throw new Win32Exception(Marshal.GetLastPInvokeError(), $"Cannot open volume {drive.Letter}:");
 
@@ -53,7 +59,11 @@ public sealed class MftScanner
             while (true)
             {
                 ct.ThrowIfCancellationRequested();
-                if (!Kernel32.DeviceIoControl(h, Kernel32.FSCTL_ENUM_USN_DATA, &med, sizeof(MftEnumDataV1), buffer, BufferSize, out int returned, 0))
+                long t0 = System.Diagnostics.Stopwatch.GetTimestamp();
+                bool ok = Kernel32.DeviceIoControl(h, Kernel32.FSCTL_ENUM_USN_DATA, &med, sizeof(MftEnumDataV1), buffer, BufferSize, out int returned, 0);
+                long t1 = System.Diagnostics.Stopwatch.GetTimestamp();
+                ioTicks += t1 - t0;
+                if (!ok)
                 {
                     int err = Marshal.GetLastPInvokeError();
                     if (err == Kernel32.ERROR_HANDLE_EOF) break;
@@ -70,6 +80,7 @@ public sealed class MftScanner
                     if (rec.ParentRecordNo == RootRecord && IsSkippedRootName(rec.Name)) continue;
                     builder.AddRecord(rec.RecordNo, rec.ParentRecordNo, rec.Name, EntryFlagsExtensions.FromAttributes(rec.Attributes));
                 }
+                parseTicks += System.Diagnostics.Stopwatch.GetTimestamp() - t1;
                 if (progress is not null && Environment.TickCount64 - lastReport > 200)
                 {
                     lastReport = Environment.TickCount64;
@@ -80,7 +91,11 @@ public sealed class MftScanner
         }
         finally { NativeMemory.Free(buffer); }
 
+        IoTime = System.Diagnostics.Stopwatch.GetElapsedTime(0, ioTicks);
+        ParseTime = System.Diagnostics.Stopwatch.GetElapsedTime(0, parseTicks);
+        long b0 = System.Diagnostics.Stopwatch.GetTimestamp();
         var v = builder.Build(RootRecord);
+        BuildTime = System.Diagnostics.Stopwatch.GetElapsedTime(b0);
         v.UsnJournalId = jd.UsnJournalID;
         v.NextUsn = jd.NextUsn;
         v.VolumeSerial = drive.Serial;

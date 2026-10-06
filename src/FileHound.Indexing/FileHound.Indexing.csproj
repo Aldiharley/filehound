@@ -1,10 +1,13 @@
-<Project Sdk="Microsoft.NET.Sdk">
+﻿<Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <TargetFramework>net10.0-windows</TargetFramework>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\FileHound.Core\FileHound.Core.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <Using Include="FileHound.Core.Index" />
   </ItemGroup>
   <ItemGroup>
     <InternalsVisibleTo Include="FileHound.Indexing.Tests" />

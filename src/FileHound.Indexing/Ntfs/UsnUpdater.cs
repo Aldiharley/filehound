@@ -1,0 +1,172 @@
+using System.Runtime.InteropServices;
+using FileHound.Indexing.Interop;
+
+namespace FileHound.Indexing.Ntfs;
+
+/// <summary>
+/// Keeps a Turbo (MFT-built) index current by polling the NTFS USN change journal from
+/// <see cref="VolumeIndex.NextUsn"/>. Raises <see cref="JournalInvalid"/> when the journal wrapped, was deleted
+/// or recreated, in which case the owner must rescan.
+/// </summary>
+public sealed class UsnUpdater : IDisposable
+{
+    private const long RootRecord = 5;
+    private const UsnReason Mask = UsnReason.FileCreate | UsnReason.FileDelete | UsnReason.RenameNewName | UsnReason.RenameOldName |
+                                   UsnReason.DataChanges | UsnReason.BasicInfoChange | UsnReason.HardLinkChange | UsnReason.Close;
+
+    private readonly VolumeIndex _index;
+    private readonly char _letter;
+    private readonly TimeSpan _interval;
+    private readonly CancellationTokenSource _cts = new();
+    private Task? _loop;
+
+    public UsnUpdater(VolumeIndex index, char letter, TimeSpan pollInterval)
+    {
+        _index = index;
+        _letter = letter;
+        _interval = pollInterval;
+    }
+
+    public event EventHandler? Applied;
+    public event EventHandler? JournalInvalid;
+
+    public void Start() => _loop = Task.Run(LoopAsync);
+
+    private async Task LoopAsync()
+    {
+        using var timer = new PeriodicTimer(_interval);
+        try
+        {
+            do
+            {
+                int result = Poll();
+                if (result < 0) { JournalInvalid?.Invoke(this, EventArgs.Empty); return; }
+                if (result > 0) Applied?.Invoke(this, EventArgs.Empty);
+            }
+            while (await timer.WaitForNextTickAsync(_cts.Token).ConfigureAwait(false));
+        }
+        catch (OperationCanceledException) { }
+    }
+
+    /// <summary>Reads all pending journal records. Returns the number applied, or -1 if the journal is invalid.</summary>
+    private unsafe int Poll()
+    {
+        using var h = Kernel32.OpenVolume(_letter);
+        if (h.IsInvalid) return -1;
+        const int BufferSize = 256 * 1024;
+        byte* buffer = (byte*)NativeMemory.Alloc(BufferSize);
+        int applied = 0;
+        try
+        {
+            while (!_cts.IsCancellationRequested)
+            {
+                var read = new ReadUsnJournalDataV1
+                {
+                    StartUsn = _index.NextUsn,
+                    ReasonMask = (uint)Mask,
+                    ReturnOnlyOnClose = 1,
+                    Timeout = 0,
+                    BytesToWaitFor = 0,
+                    UsnJournalID = _index.UsnJournalId,
+                    MinMajorVersion = 2,
+                    MaxMajorVersion = 3,
+                };
+                if (!Kernel32.DeviceIoControl(h, Kernel32.FSCTL_READ_USN_JOURNAL, &read, sizeof(ReadUsnJournalDataV1), buffer, BufferSize, out int returned, 0))
+                {
+                    int err = Marshal.GetLastPInvokeError();
+                    return err is Kernel32.ERROR_JOURNAL_ENTRY_DELETED or Kernel32.ERROR_JOURNAL_NOT_ACTIVE or Kernel32.ERROR_JOURNAL_DELETE_IN_PROGRESS or 87 /* invalid parameter: journal id mismatch */
+                        ? -1 : applied;
+                }
+                long next = *(long*)buffer;
+                if (returned > 8) applied += ApplyBuffer(new ReadOnlySpan<byte>(buffer + 8, returned - 8));
+                bool advanced = next != _index.NextUsn;
+                _index.NextUsn = next;
+                if (returned <= 8 || !advanced) break;
+            }
+        }
+        finally { NativeMemory.Free(buffer); }
+        return applied;
+    }
+
+    /// <summary>Applies a buffer of USN records (without the leading 8-byte USN). Returns the number of changes.</summary>
+    internal int ApplyBuffer(ReadOnlySpan<byte> records)
+    {
+        int changes = 0;
+        var refresh = new List<int>();
+        _index.Lock.EnterWriteLock();
+        try
+        {
+            while (UsnRecordParser.TryRead(records, out var rec))
+            {
+                records = records[rec.Length..];
+                int e = _index.FindByRecord(rec.RecordNo);
+                if ((rec.Reason & UsnReason.FileDelete) != 0)
+                {
+                    if (e > 0) { _index.Delete(e); changes++; }
+                    continue;
+                }
+                if ((rec.Reason & (UsnReason.FileCreate | UsnReason.RenameNewName)) != 0 || e <= 0)
+                {
+                    int parent = rec.ParentRecordNo == RootRecord ? VolumeIndex.RootEntry : _index.FindByRecord(rec.ParentRecordNo);
+                    if (parent < 0) continue; // parent not indexed (metafile area or excluded)
+                    if (rec.ParentRecordNo == RootRecord && rec.Name.Length > 0 && rec.Name[0] == '$') continue;
+                    var flags = EntryFlagsExtensions.FromAttributes(rec.Attributes);
+                    if (e > 0 && _index.IsLive(e))
+                    {
+                        _index.Rename(e, parent, rec.Name);
+                        _index.SetAttributes(e, flags);
+                    }
+                    else
+                    {
+                        e = _index.Add(parent, rec.Name, flags, 0, 0, rec.RecordNo);
+                    }
+                    changes++;
+                    refresh.Add(e);
+                    continue;
+                }
+                if ((rec.Reason & (UsnReason.DataChanges | UsnReason.BasicInfoChange)) != 0 && _index.IsLive(e))
+                {
+                    _index.SetAttributes(e, EntryFlagsExtensions.FromAttributes(rec.Attributes));
+                    refresh.Add(e);
+                    changes++;
+                }
+            }
+        }
+        finally { _index.Lock.ExitWriteLock(); }
+
+        foreach (int e in refresh) RefreshMetadata(e);
+        return changes;
+    }
+
+    private void RefreshMetadata(int e)
+    {
+        string path;
+        _index.Lock.EnterReadLock();
+        try
+        {
+            if (!_index.IsLive(e)) return;
+            path = PathBuilder.GetFullPath(_index, e);
+        }
+        finally { _index.Lock.ExitReadLock(); }
+
+        try
+        {
+            var fi = new FileInfo(path);
+            long size; DateTime mod;
+            if (fi.Exists) { size = fi.Length; mod = fi.LastWriteTimeUtc; }
+            else if (Directory.Exists(path)) { size = 0; mod = Directory.GetLastWriteTimeUtc(path); }
+            else return;
+            _index.Lock.EnterReadLock();
+            try { if (_index.IsLive(e)) _index.SetMetadata(e, size, mod.Ticks); }
+            finally { _index.Lock.ExitReadLock(); }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+    }
+
+    public void Dispose()
+    {
+        _cts.Cancel();
+        try { _loop?.Wait(TimeSpan.FromSeconds(2)); } catch (AggregateException) { }
+        _cts.Dispose();
+    }
+}

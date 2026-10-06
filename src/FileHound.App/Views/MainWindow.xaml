@@ -1,0 +1,166 @@
+<Window x:Class="FileHound.App.Views.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:c="clr-namespace:FileHound.App.Controls"
+        xmlns:vm="clr-namespace:FileHound.App.ViewModels"
+        xmlns:v="clr-namespace:FileHound.App.Views"
+        Title="FileHound" Width="1280" Height="860" MinWidth="1040" MinHeight="700"
+        WindowStartupLocation="CenterScreen" Icon="/Assets/app.ico"
+        Background="{StaticResource Canvas}" FontFamily="{StaticResource UiFont}" Foreground="{StaticResource Ink}"
+        UseLayoutRounding="True" TextOptions.TextFormattingMode="Ideal" SnapsToDevicePixels="True">
+    <WindowChrome.WindowChrome>
+        <WindowChrome CaptionHeight="64" ResizeBorderThickness="6" GlassFrameThickness="0" CornerRadius="0" UseAeroCaptionButtons="False" />
+    </WindowChrome.WindowChrome>
+
+    <Window.Resources>
+        <c:EnumEqualsConverter x:Key="EnumEquals" />
+        <c:VisibleWhenConverter x:Key="VisibleWhen" />
+        <DataTemplate DataType="{x:Type vm:DashboardViewModel}"><v:DashboardView /></DataTemplate>
+        <DataTemplate DataType="{x:Type vm:SearchViewModel}"><v:SearchView /></DataTemplate>
+        <DataTemplate DataType="{x:Type vm:DrivesViewModel}"><v:DrivesView /></DataTemplate>
+        <DataTemplate DataType="{x:Type vm:SettingsViewModel}"><v:SettingsView /></DataTemplate>
+    </Window.Resources>
+
+    <Grid x:Name="Root">
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="264" />
+            <ColumnDefinition Width="*" />
+        </Grid.ColumnDefinitions>
+
+        <!-- ======================================================== sidebar -->
+        <c:ClayCard Margin="16" Padding="18,22,18,18" Background="{StaticResource Sidebar}" CornerRadius="28">
+            <DockPanel LastChildFill="False">
+                <StackPanel DockPanel.Dock="Top">
+                    <Grid Width="124" Height="124" HorizontalAlignment="Center">
+                        <Ellipse Fill="{StaticResource SidebarActive}" Effect="{StaticResource ClayShadowSmall}" />
+                        <Ellipse Margin="6">
+                            <Ellipse.Fill>
+                                <ImageBrush ImageSource="/Assets/hound-avatar.png" Stretch="UniformToFill" RenderOptions.BitmapScalingMode="HighQuality" />
+                            </Ellipse.Fill>
+                        </Ellipse>
+                    </Grid>
+                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Margin="0,14,0,22">
+                        <TextBlock Text="{Binding SidebarGreeting}" Style="{StaticResource Title}" FontSize="19" VerticalAlignment="Center" />
+                        <Image Source="/Assets/icon-paw.png" Width="24" Height="24" Margin="6,0,0,0" VerticalAlignment="Center" />
+                    </StackPanel>
+
+                    <RadioButton Style="{StaticResource NavItem}" GroupName="nav"
+                                 IsChecked="{Binding CurrentPage, Converter={StaticResource EnumEquals}, ConverterParameter=Dashboard}"
+                                 Command="{Binding NavigateCommand}" CommandParameter="{x:Static vm:AppPage.Dashboard}" AutomationProperties.Name="Dashboard">
+                        <StackPanel Orientation="Horizontal">
+                            <Image Source="/Assets/icon-home.png" Width="28" Height="28" Margin="0,0,14,0" RenderOptions.BitmapScalingMode="HighQuality" />
+                            <TextBlock Text="Dashboard" VerticalAlignment="Center" />
+                        </StackPanel>
+                    </RadioButton>
+                    <RadioButton Style="{StaticResource NavItem}" GroupName="nav"
+                                 IsChecked="{Binding CurrentPage, Converter={StaticResource EnumEquals}, ConverterParameter=Search}"
+                                 Command="{Binding NavigateCommand}" CommandParameter="{x:Static vm:AppPage.Search}" AutomationProperties.Name="Search">
+                        <StackPanel Orientation="Horizontal">
+                            <Image Source="/Assets/icon-search.png" Width="28" Height="28" Margin="0,0,14,0" RenderOptions.BitmapScalingMode="HighQuality" />
+                            <TextBlock Text="Search" VerticalAlignment="Center" />
+                        </StackPanel>
+                    </RadioButton>
+                    <RadioButton Style="{StaticResource NavItem}" GroupName="nav"
+                                 IsChecked="{Binding CurrentPage, Converter={StaticResource EnumEquals}, ConverterParameter=Drives}"
+                                 Command="{Binding NavigateCommand}" CommandParameter="{x:Static vm:AppPage.Drives}" AutomationProperties.Name="Drives">
+                        <StackPanel Orientation="Horizontal">
+                            <Image Source="/Assets/icon-drive.png" Width="28" Height="28" Margin="0,0,14,0" RenderOptions.BitmapScalingMode="HighQuality" />
+                            <TextBlock Text="Drives" VerticalAlignment="Center" />
+                        </StackPanel>
+                    </RadioButton>
+                    <RadioButton Style="{StaticResource NavItem}" GroupName="nav"
+                                 IsChecked="{Binding CurrentPage, Converter={StaticResource EnumEquals}, ConverterParameter=Settings}"
+                                 Command="{Binding NavigateCommand}" CommandParameter="{x:Static vm:AppPage.Settings}" AutomationProperties.Name="Settings">
+                        <StackPanel Orientation="Horizontal">
+                            <Image Source="/Assets/icon-gear.png" Width="28" Height="28" Margin="0,0,14,0" RenderOptions.BitmapScalingMode="HighQuality" />
+                            <TextBlock Text="Settings" VerticalAlignment="Center" />
+                        </StackPanel>
+                    </RadioButton>
+                </StackPanel>
+
+                <!-- Turbo card (mirrors "Go Premium" in the reference) -->
+                <c:ClayCard DockPanel.Dock="Bottom" Background="{StaticResource Peach}" CornerRadius="24" Padding="16,18"
+                            Visibility="{Binding IsElevated, Converter={StaticResource VisibleWhen}, ConverterParameter=invert}">
+                    <StackPanel>
+                        <Image Source="/Assets/icon-bolt.png" Width="58" Height="58" RenderOptions.BitmapScalingMode="HighQuality" />
+                        <TextBlock Text="Turbo indexing" Style="{StaticResource Title}" HorizontalAlignment="Center" Margin="0,8,0,4" />
+                        <TextBlock Text="Read the drive's master file table: ~10× faster scans and always-fresh results."
+                                   Style="{StaticResource Caption}" Foreground="{StaticResource Ink}" TextWrapping="Wrap" TextAlignment="Center" />
+                        <Button Style="{StaticResource ClayButton}" Content="Enable Turbo" Margin="0,14,0,0" Command="{Binding EnableTurboCommand}"
+                                ToolTip="Restarts FileHound with administrator rights (one UAC prompt)" />
+                    </StackPanel>
+                </c:ClayCard>
+                <c:ClayCard DockPanel.Dock="Bottom" Background="{StaticResource Mint}" CornerRadius="24" Padding="16,14"
+                            Visibility="{Binding IsElevated, Converter={StaticResource VisibleWhen}}">
+                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
+                        <Image Source="/Assets/icon-bolt.png" Width="34" Height="34" Margin="0,0,8,0" />
+                        <TextBlock Text="Turbo is on ✓" Style="{StaticResource BodyStrong}" VerticalAlignment="Center" />
+                    </StackPanel>
+                </c:ClayCard>
+            </DockPanel>
+        </c:ClayCard>
+
+        <!-- ======================================================== main column -->
+        <Grid Grid.Column="1" Margin="8,16,24,16">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="64" />
+                <RowDefinition Height="*" />
+            </Grid.RowDefinitions>
+
+            <!-- header (doubles as the window drag area) -->
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <TextBlock Text="{Binding PageTitle}" Style="{StaticResource Display}" VerticalAlignment="Center" Margin="8,0,0,0" />
+
+                <TextBox x:Name="HeaderSearch" Grid.Column="1" Width="340" Margin="0,0,14,0" Style="{StaticResource PillSearchBox}" Height="44"
+                         Tag="Search files and folders…" WindowChrome.IsHitTestVisibleInChrome="True"
+                         Text="{Binding HeaderQuery, UpdateSourceTrigger=PropertyChanged}"
+                         AutomationProperties.Name="Search files and folders" />
+
+                <Button Grid.Column="2" Command="{Binding NavigateCommand}" CommandParameter="{x:Static vm:AppPage.Drives}" Cursor="Hand"
+                        WindowChrome.IsHitTestVisibleInChrome="True" Focusable="False" ToolTip="Drive and index status">
+                    <Button.Template>
+                        <ControlTemplate TargetType="Button">
+                            <Border x:Name="Chip" CornerRadius="20" Height="40" Padding="12,0,16,0" Background="{StaticResource Mint}">
+                                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                    <Image Source="/Assets/icon-paw.png" Width="24" Height="24" Margin="0,0,8,0" />
+                                    <TextBlock Text="{Binding StatusText}" Style="{StaticResource BodyStrong}" FontSize="13" VerticalAlignment="Center" />
+                                </StackPanel>
+                            </Border>
+                            <ControlTemplate.Triggers>
+                                <DataTrigger Binding="{Binding StatusKind}" Value="busy">
+                                    <Setter TargetName="Chip" Property="Background" Value="{StaticResource Butter}" />
+                                </DataTrigger>
+                                <DataTrigger Binding="{Binding StatusKind}" Value="warn">
+                                    <Setter TargetName="Chip" Property="Background" Value="{StaticResource Rose}" />
+                                </DataTrigger>
+                            </ControlTemplate.Triggers>
+                        </ControlTemplate>
+                    </Button.Template>
+                </Button>
+
+                <StackPanel Grid.Column="3" Orientation="Horizontal" VerticalAlignment="Top" Margin="12,0,-12,0">
+                    <Button Style="{StaticResource CaptionButton}" Content="&#xE921;" Click="Minimize_Click" WindowChrome.IsHitTestVisibleInChrome="True" AutomationProperties.Name="Minimize" />
+                    <Button x:Name="MaxButton" Style="{StaticResource CaptionButton}" Content="&#xE922;" Click="Maximize_Click" WindowChrome.IsHitTestVisibleInChrome="True" AutomationProperties.Name="Maximize" />
+                    <Button Style="{StaticResource CloseCaptionButton}" Content="&#xE8BB;" Click="Close_Click" WindowChrome.IsHitTestVisibleInChrome="True" AutomationProperties.Name="Close" />
+                </StackPanel>
+            </Grid>
+
+            <ContentControl x:Name="PageHost" Grid.Row="1" Content="{Binding CurrentView}" Focusable="False" Margin="0,8,0,0" />
+        </Grid>
+
+        <!-- ======================================================== toast -->
+        <Border Grid.ColumnSpan="2" HorizontalAlignment="Center" VerticalAlignment="Bottom" Margin="0,0,0,28" IsHitTestVisible="False"
+                Visibility="{Binding IsToastVisible, Converter={StaticResource VisibleWhen}}">
+            <Grid>
+                <Border CornerRadius="20" Background="{StaticResource Ink}" Effect="{StaticResource ClayShadow}" />
+                <TextBlock Text="{Binding ToastText}" Foreground="White" FontWeight="SemiBold" Margin="20,10" />
+            </Grid>
+        </Border>
+    </Grid>
+</Window>

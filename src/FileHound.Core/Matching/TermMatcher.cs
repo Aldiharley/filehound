@@ -52,7 +52,8 @@ public static class TermMatcher
 
             if (fuzzy && m >= 2 && FuzzyScorer.TryMatchSubsequence(name, fold, pattern, out int s, out int start, out int end))
             {
-                if (end - start <= Math.Max(3 * m, m + 12))
+                // Noise guard: the matched window may be at most about twice the term length.
+                if (end - start <= 2 * m + 3)
                 {
                     score = s;
                     return MatchTier.Subsequence;

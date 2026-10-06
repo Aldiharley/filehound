@@ -1,0 +1,196 @@
+<UserControl x:Class="FileHound.App.Views.SearchView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:c="clr-namespace:FileHound.App.Controls">
+    <UserControl.Resources>
+        <c:VisibleWhenConverter x:Key="VisibleWhen" />
+    </UserControl.Resources>
+    <Grid Margin="8,0,0,0">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <!-- big search pill -->
+        <Grid Margin="0,4,0,0">
+            <TextBox x:Name="SearchBox" Style="{StaticResource PillSearchBox}" Height="58" FontSize="17" Padding="2,0,190,0"
+                     Tag="Search every drive…  try “invce scan”, “ext:pdf budget” or “size:>1gb”"
+                     Text="{Binding QueryText, UpdateSourceTrigger=PropertyChanged, Delay=0}"
+                     PreviewKeyDown="SearchBox_PreviewKeyDown" AutomationProperties.Name="Search query" />
+            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center" Margin="0,0,12,0">
+                <ToggleButton Style="{StaticResource ToggleChip}" IsChecked="{Binding Fuzzy}" Margin="0,0,8,0"
+                              ToolTip="Fuzzy matching finds names even with missing letters or small typos">
+                    <StackPanel Orientation="Horizontal">
+                        <Image Source="/Assets/icon-paw.png" Width="18" Height="18" Margin="0,0,6,0" />
+                        <TextBlock Text="Fuzzy" VerticalAlignment="Center" />
+                    </StackPanel>
+                </ToggleButton>
+                <Button Style="{StaticResource RoundButton}" Content="&#xE711;" Command="{Binding ClearCommand}" Foreground="{StaticResource InkSoft}"
+                        ToolTip="Clear (Esc)" AutomationProperties.Name="Clear search"
+                        Visibility="{Binding QueryText, Converter={StaticResource VisibleWhen}}" />
+            </StackPanel>
+        </Grid>
+
+        <!-- category chips -->
+        <ItemsControl Grid.Row="1" ItemsSource="{Binding Chips}" Margin="0,18,0,0" Focusable="False">
+            <ItemsControl.ItemsPanel>
+                <ItemsPanelTemplate><WrapPanel /></ItemsPanelTemplate>
+            </ItemsControl.ItemsPanel>
+            <ItemsControl.ItemTemplate>
+                <DataTemplate>
+                    <RadioButton Style="{StaticResource Chip}" GroupName="category" Background="{Binding Dot}" Margin="0,0,8,6"
+                                 IsChecked="{Binding IsSelected, Mode=TwoWay}">
+                        <StackPanel Orientation="Horizontal">
+                            <Ellipse Width="9" Height="9" Fill="{Binding Dot}" Stroke="#30000000" StrokeThickness="0.5" Margin="0,0,7,0" VerticalAlignment="Center" />
+                            <TextBlock Text="{Binding Label}" VerticalAlignment="Center" />
+                        </StackPanel>
+                    </RadioButton>
+                </DataTemplate>
+            </ItemsControl.ItemTemplate>
+        </ItemsControl>
+
+        <!-- toolbar: summary + sort -->
+        <DockPanel Grid.Row="2" Margin="4,10,0,12" LastChildFill="True">
+            <ItemsControl DockPanel.Dock="Right" ItemsSource="{Binding SortChips}" Focusable="False">
+                <ItemsControl.ItemsPanel>
+                    <ItemsPanelTemplate><StackPanel Orientation="Horizontal" /></ItemsPanelTemplate>
+                </ItemsControl.ItemsPanel>
+                <ItemsControl.ItemTemplate>
+                    <DataTemplate>
+                        <RadioButton Style="{StaticResource Chip}" GroupName="sort" Background="{Binding Dot}" Height="30" FontSize="12" Margin="6,0,0,0"
+                                     IsChecked="{Binding IsSelected, Mode=TwoWay}" Content="{Binding Label}" />
+                    </DataTemplate>
+                </ItemsControl.ItemTemplate>
+            </ItemsControl>
+            <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                <TextBlock Text="{Binding SummaryText}" Style="{StaticResource Number}" FontSize="13" FontWeight="SemiBold" VerticalAlignment="Center" />
+                <Border Background="{StaticResource Lilac}" CornerRadius="10" Padding="8,2" Margin="10,0,0,0"
+                        Visibility="{Binding UsedTypoPass, Converter={StaticResource VisibleWhen}}"
+                        ToolTip="Few exact matches, so FileHound also looked for close spellings">
+                    <TextBlock Text="typo-tolerant" FontSize="11" FontWeight="SemiBold" />
+                </Border>
+                <TextBlock Text="{Binding ErrorText}" Foreground="{StaticResource RoseDeep}" FontSize="12" Margin="10,0,0,0" VerticalAlignment="Center"
+                           Visibility="{Binding ErrorText, Converter={StaticResource VisibleWhen}}" />
+            </StackPanel>
+        </DockPanel>
+
+        <!-- results card -->
+        <c:ClayCard Grid.Row="3" Padding="10,8,10,8" CornerRadius="24">
+            <Grid>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="*" />
+                    <RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
+
+                <Border CornerRadius="12" Background="{StaticResource Butter}" Padding="12,6" Margin="2,2,2,6"
+                        Visibility="{Binding IndexingNotice, Converter={StaticResource VisibleWhen}}">
+                    <StackPanel Orientation="Horizontal">
+                        <Image Source="/Assets/icon-paw.png" Width="18" Height="18" Margin="0,0,8,0" />
+                        <TextBlock Text="{Binding IndexingNotice}" FontSize="12" FontWeight="SemiBold" VerticalAlignment="Center" />
+                    </StackPanel>
+                </Border>
+
+                <!-- column header -->
+                <Grid Grid.Row="1" Margin="12,4,22,6" TextElement.Foreground="{StaticResource InkFaint}">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="40" />
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="110" />
+                        <ColumnDefinition Width="120" />
+                    </Grid.ColumnDefinitions>
+                    <TextBlock Grid.Column="1" Text="NAME" FontSize="11" FontWeight="SemiBold" />
+                    <TextBlock Grid.Column="2" Text="SIZE" FontSize="11" FontWeight="SemiBold" HorizontalAlignment="Right" />
+                    <TextBlock Grid.Column="3" Text="MODIFIED" FontSize="11" FontWeight="SemiBold" HorizontalAlignment="Right" />
+                </Grid>
+
+                <ListBox x:Name="Results" Grid.Row="2" ItemsSource="{Binding Results}" SelectedItem="{Binding Selected, Mode=TwoWay}"
+                         Background="Transparent" BorderThickness="0" ItemContainerStyle="{StaticResource ResultItem}"
+                         ScrollViewer.HorizontalScrollBarVisibility="Disabled" ScrollViewer.CanContentScroll="True"
+                         VirtualizingPanel.IsVirtualizing="True" VirtualizingPanel.VirtualizationMode="Recycling"
+                         VirtualizingPanel.ScrollUnit="Pixel" VirtualizingPanel.CacheLength="2,2" VirtualizingPanel.CacheLengthUnit="Page"
+                         PreviewKeyDown="Results_PreviewKeyDown" MouseDoubleClick="Results_MouseDoubleClick"
+                         PreviewMouseLeftButtonDown="Results_PreviewMouseLeftButtonDown" PreviewMouseMove="Results_PreviewMouseMove"
+                         AutomationProperties.Name="Search results">
+                    <ListBox.ContextMenu>
+                        <ContextMenu>
+                            <MenuItem Header="Open" InputGestureText="Enter" Command="{Binding OpenCommand}" Icon="&#xE8E5;" />
+                            <MenuItem Header="Open containing folder" InputGestureText="Ctrl+Enter" Command="{Binding RevealCommand}" Icon="&#xED25;" />
+                            <Separator />
+                            <MenuItem Header="Copy path" InputGestureText="Ctrl+Shift+C" Command="{Binding CopyPathCommand}" Icon="&#xE8C8;" />
+                            <MenuItem Header="Copy name" Command="{Binding CopyNameCommand}" Icon="&#xE8AC;" />
+                            <MenuItem Header="Copy file" InputGestureText="Ctrl+C" Command="{Binding CopyFileCommand}" Icon="&#xE7C3;" />
+                            <Separator />
+                            <MenuItem Header="Properties" InputGestureText="Alt+Enter" Command="{Binding PropertiesCommand}" Icon="&#xE946;" />
+                        </ContextMenu>
+                    </ListBox.ContextMenu>
+                    <ListBox.ItemTemplate>
+                        <DataTemplate>
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="40" />
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="110" />
+                                    <ColumnDefinition Width="120" />
+                                </Grid.ColumnDefinitions>
+                                <Image Source="{Binding Icon, IsAsync=False}" Width="24" Height="24" HorizontalAlignment="Left" RenderOptions.BitmapScalingMode="HighQuality" />
+                                <StackPanel Grid.Column="1" VerticalAlignment="Center" Margin="0,0,12,0">
+                                    <TextBlock c:HighlightText.Item="{Binding}" Style="{StaticResource BodyStrong}" TextTrimming="CharacterEllipsis" />
+                                    <TextBlock Text="{Binding FolderPath}" Style="{StaticResource Caption}" TextTrimming="CharacterEllipsis" Margin="0,2,0,0" />
+                                </StackPanel>
+                                <TextBlock Grid.Column="2" Text="{Binding SizeText}" Style="{StaticResource Number}" FontSize="13" HorizontalAlignment="Right" VerticalAlignment="Center" />
+                                <TextBlock Grid.Column="3" Text="{Binding ModifiedText}" Style="{StaticResource Number}" FontSize="13" HorizontalAlignment="Right" VerticalAlignment="Center" />
+                            </Grid>
+                        </DataTemplate>
+                    </ListBox.ItemTemplate>
+                </ListBox>
+
+                <!-- empty state: no query -->
+                <StackPanel Grid.Row="1" Grid.RowSpan="2" VerticalAlignment="Center" HorizontalAlignment="Center"
+                            Visibility="{Binding IsEmptyQuery, Converter={StaticResource VisibleWhen}}">
+                    <Image Source="/Assets/hound-sleep.png" Width="220" Height="220" RenderOptions.BitmapScalingMode="HighQuality" />
+                    <TextBlock Text="What are we sniffing for?" Style="{StaticResource HeroTitle}" FontSize="22" HorizontalAlignment="Center" Margin="0,4,0,6" />
+                    <TextBlock Text="Type any part of a name — FileHound searches every drive as you type." Style="{StaticResource Caption}" FontSize="13" HorizontalAlignment="Center" />
+                    <ItemsControl ItemsSource="{Binding Examples}" Margin="0,18,0,0" HorizontalAlignment="Center" Focusable="False" MaxWidth="560">
+                        <ItemsControl.ItemsPanel>
+                            <ItemsPanelTemplate><WrapPanel HorizontalAlignment="Center" /></ItemsPanelTemplate>
+                        </ItemsControl.ItemsPanel>
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate>
+                                <Button Style="{StaticResource SoftButton}" Content="{Binding}" Margin="5" FontFamily="Cascadia Mono, Consolas"
+                                        Command="{Binding DataContext.InsertExampleCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}" CommandParameter="{Binding}" />
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                </StackPanel>
+
+                <!-- empty state: no results -->
+                <StackPanel Grid.Row="1" Grid.RowSpan="2" VerticalAlignment="Center" HorizontalAlignment="Center"
+                            Visibility="{Binding HasNoResults, Converter={StaticResource VisibleWhen}}">
+                    <Image Source="/Assets/hound-shrug.png" Width="200" Height="200" RenderOptions.BitmapScalingMode="HighQuality" />
+                    <TextBlock Text="No luck this time" Style="{StaticResource HeroTitle}" FontSize="22" HorizontalAlignment="Center" Margin="0,4,0,6" />
+                    <TextBlock Text="Try fewer letters, another category, or turn on Fuzzy." Style="{StaticResource Caption}" FontSize="13" HorizontalAlignment="Center" />
+                    <Button Style="{StaticResource ClayButton}" Content="Search with fuzzy" Margin="0,16,0,0" HorizontalAlignment="Center" Command="{Binding EnableFuzzyCommand}"
+                            Visibility="{Binding Fuzzy, Converter={StaticResource VisibleWhen}, ConverterParameter=invert}" />
+                </StackPanel>
+
+                <!-- selection footer -->
+                <Border Grid.Row="3" CornerRadius="14" Background="{StaticResource SurfaceSunken}" Padding="12,6" Margin="2,8,2,0"
+                        Visibility="{Binding Selected, Converter={StaticResource VisibleWhen}}">
+                    <DockPanel>
+                        <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
+                            <Button Style="{StaticResource RoundButton}" Width="32" Height="32" Margin="4,0" Content="&#xE8E5;" Command="{Binding OpenCommand}" ToolTip="Open (Enter)" AutomationProperties.Name="Open" />
+                            <Button Style="{StaticResource RoundButton}" Width="32" Height="32" Margin="4,0" Content="&#xED25;" Command="{Binding RevealCommand}" ToolTip="Open containing folder (Ctrl+Enter)" AutomationProperties.Name="Open containing folder" />
+                            <Button Style="{StaticResource RoundButton}" Width="32" Height="32" Margin="4,0" Content="&#xE8C8;" Command="{Binding CopyPathCommand}" ToolTip="Copy path (Ctrl+Shift+C)" AutomationProperties.Name="Copy path" />
+                            <Button Style="{StaticResource RoundButton}" Width="32" Height="32" Margin="4,0,0,0" Content="&#xE946;" Command="{Binding PropertiesCommand}" ToolTip="Properties (Alt+Enter)" AutomationProperties.Name="Properties" />
+                        </StackPanel>
+                        <TextBlock Text="{Binding Selected.FullPath}" Style="{StaticResource Caption}" FontSize="12" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
+                    </DockPanel>
+                </Border>
+            </Grid>
+        </c:ClayCard>
+    </Grid>
+</UserControl>

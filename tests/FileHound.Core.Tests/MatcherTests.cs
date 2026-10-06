@@ -45,6 +45,13 @@ public class MatcherTests
         Assert.Equal(MatchTier.None, M("a_very_long_name_with_random_letters_scattered_everywhere.txt", "anws"));
 
     [Theory]
+    [InlineData("Uninstall Advanced IP Scanner.lnk", "invce", MatchTier.None)]   // letters spread over two words
+    [InlineData("Invoice_2024.pdf", "invce", MatchTier.Subsequence)]
+    [InlineData("final.docx", "fnl", MatchTier.Subsequence)]
+    [InlineData("quarterly.xlsx", "qrtrly", MatchTier.Subsequence)]
+    public void Noise_guard_keeps_compact_subsequences(string name, string q, MatchTier expected) => Assert.Equal(expected, M(name, q));
+
+    [Theory]
     [InlineData("hello.txt", "*.txt", true)]
     [InlineData("hello.txt", "h?llo.*", true)]
     [InlineData("hello.txt", "*.doc", false)]

@@ -1,0 +1,70 @@
+<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <!-- Design tokens: docs/superpowers/specs/2026-10-07-filehound-uiux.md §2 -->
+    <Color x:Key="CanvasColor">#FBF4EA</Color>
+    <Color x:Key="SurfaceColor">#FFFBF5</Color>
+    <Color x:Key="SurfaceSunkenColor">#F5ECDF</Color>
+    <Color x:Key="SidebarColor">#D5E5DA</Color>
+    <Color x:Key="SidebarActiveColor">#FFF8EE</Color>
+    <Color x:Key="InkColor">#3F3A36</Color>
+    <Color x:Key="InkSoftColor">#7A716A</Color>
+    <Color x:Key="InkFaintColor">#A59C93</Color>
+    <Color x:Key="PeachColor">#F8CDB8</Color>
+    <Color x:Key="PeachDeepColor">#EE8F6E</Color>
+    <Color x:Key="MintColor">#CFE6D3</Color>
+    <Color x:Key="MintDeepColor">#6FAE84</Color>
+    <Color x:Key="ButterColor">#F9E3A6</Color>
+    <Color x:Key="ButterDeepColor">#E3B248</Color>
+    <Color x:Key="SkyColor">#CFDDF0</Color>
+    <Color x:Key="SkyDeepColor">#7E9CC9</Color>
+    <Color x:Key="LilacColor">#E3D5F0</Color>
+    <Color x:Key="LilacDeepColor">#9E85C4</Color>
+    <Color x:Key="RoseColor">#F6D0D6</Color>
+    <Color x:Key="RoseDeepColor">#D9798A</Color>
+    <Color x:Key="ShadowColor">#8C6E55</Color>
+    <Color x:Key="HighlightBackColor">#FCE3D7</Color>
+
+    <SolidColorBrush x:Key="Canvas" Color="{StaticResource CanvasColor}" />
+    <SolidColorBrush x:Key="Surface" Color="{StaticResource SurfaceColor}" />
+    <SolidColorBrush x:Key="SurfaceSunken" Color="{StaticResource SurfaceSunkenColor}" />
+    <SolidColorBrush x:Key="Sidebar" Color="{StaticResource SidebarColor}" />
+    <SolidColorBrush x:Key="SidebarActive" Color="{StaticResource SidebarActiveColor}" />
+    <SolidColorBrush x:Key="Ink" Color="{StaticResource InkColor}" />
+    <SolidColorBrush x:Key="InkSoft" Color="{StaticResource InkSoftColor}" />
+    <SolidColorBrush x:Key="InkFaint" Color="{StaticResource InkFaintColor}" />
+    <SolidColorBrush x:Key="Peach" Color="{StaticResource PeachColor}" />
+    <SolidColorBrush x:Key="PeachDeep" Color="{StaticResource PeachDeepColor}" />
+    <SolidColorBrush x:Key="Mint" Color="{StaticResource MintColor}" />
+    <SolidColorBrush x:Key="MintDeep" Color="{StaticResource MintDeepColor}" />
+    <SolidColorBrush x:Key="Butter" Color="{StaticResource ButterColor}" />
+    <SolidColorBrush x:Key="ButterDeep" Color="{StaticResource ButterDeepColor}" />
+    <SolidColorBrush x:Key="Sky" Color="{StaticResource SkyColor}" />
+    <SolidColorBrush x:Key="SkyDeep" Color="{StaticResource SkyDeepColor}" />
+    <SolidColorBrush x:Key="Lilac" Color="{StaticResource LilacColor}" />
+    <SolidColorBrush x:Key="LilacDeep" Color="{StaticResource LilacDeepColor}" />
+    <SolidColorBrush x:Key="Rose" Color="{StaticResource RoseColor}" />
+    <SolidColorBrush x:Key="RoseDeep" Color="{StaticResource RoseDeepColor}" />
+    <SolidColorBrush x:Key="HighlightBack" Color="{StaticResource HighlightBackColor}" />
+    <SolidColorBrush x:Key="SelectionFill" Color="#73F8CDB8" />
+    <SolidColorBrush x:Key="OtherCategory" Color="#E8DFD3" />
+
+    <LinearGradientBrush x:Key="HeroGradient" StartPoint="0,0" EndPoint="1,1">
+        <GradientStop Color="#F9D3C0" Offset="0" />
+        <GradientStop Color="#F6C2AE" Offset="1" />
+    </LinearGradientBrush>
+    <!-- Puffy clay rim: bright top edge fading out. -->
+    <LinearGradientBrush x:Key="ClayRim" StartPoint="0,0" EndPoint="0,1">
+        <GradientStop Color="#CCFFFFFF" Offset="0" />
+        <GradientStop Color="#00FFFFFF" Offset="0.35" />
+        <GradientStop Color="#00FFFFFF" Offset="0.8" />
+        <GradientStop Color="#14000000" Offset="1" />
+    </LinearGradientBrush>
+    <LinearGradientBrush x:Key="InsetShade" StartPoint="0,0" EndPoint="0,1">
+        <GradientStop Color="#12000000" Offset="0" />
+        <GradientStop Color="#00000000" Offset="0.25" />
+    </LinearGradientBrush>
+
+    <DropShadowEffect x:Key="ClayShadow" BlurRadius="28" ShadowDepth="6" Direction="270" Opacity="0.14" Color="{StaticResource ShadowColor}" RenderingBias="Performance" />
+    <DropShadowEffect x:Key="ClayShadowSmall" BlurRadius="14" ShadowDepth="3" Direction="270" Opacity="0.16" Color="{StaticResource ShadowColor}" RenderingBias="Performance" />
+    <DropShadowEffect x:Key="ClayShadowButton" BlurRadius="16" ShadowDepth="4" Direction="270" Opacity="0.28" Color="{StaticResource PeachDeepColor}" RenderingBias="Performance" />
+</ResourceDictionary>

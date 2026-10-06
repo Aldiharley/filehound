@@ -1,4 +1,4 @@
-﻿using System.Collections.Frozen;
+using System.Collections.Frozen;
 using FileHound.Core.Index;
 
 namespace FileHound.Core.Query;
@@ -13,7 +13,7 @@ public sealed class SystemClock : IClock
 
 public enum TermKind : byte
 {
-    /// <summary>Matched against the name with tiered (exact â†’ typo) matching.</summary>
+    /// <summary>Matched against the name with tiered (exact → typo) matching.</summary>
     Plain,
     /// <summary>Contains * or ?; must match the whole name.</summary>
     Wildcard,

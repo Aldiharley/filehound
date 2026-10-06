@@ -11,9 +11,6 @@
   <ItemGroup>
     <Using Include="Xunit" />
     <Using Include="FileHound.Core.Index" />
-    <Using Include="FileHound.Core.Query" />
-    <Using Include="FileHound.Core.Matching" />
-    <Using Include="FileHound.Core.Search" />
     <Using Include="System.Diagnostics" />
     <ProjectReference Include="..\..\src\FileHound.Core\FileHound.Core.csproj" />
   </ItemGroup>

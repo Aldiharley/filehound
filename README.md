@@ -31,7 +31,8 @@ FileHound indexes every file and folder on all your local drives (C:, D:, E:, US
 |---|---|---|
 | How | Parallel folder walk (`FileSystemEnumerable`) | Reads the NTFS master file table (`FSCTL_ENUM_USN_DATA`), the technique Everything uses |
 | Live updates | FileSystemWatcher | USN change journal |
-| Speed | ~180k entries/s with a warm cache | millions of entries in seconds |
+| Speed (C:, 4–5M entries) | 24 s warm / 161 s cold | MFT scan 9 s warm / 78 s cold, sizes filled in ~19 s |
+| Restart | snapshot in ~1 s, then a background refresh walk | snapshot in ~1.5 s, journal catch-up, ready in ~2.3 s |
 | Needs | nothing | administrator approval, given once per launch via **Enable Turbo** |
 
 When FileHound runs elevated it opens files through the normal desktop shell, so they never inherit admin rights. Drag-out is disabled while elevated, because Windows blocks dragging from an elevated app into a normal one.

@@ -1,4 +1,4 @@
-using System.Buffers.Binary;
+﻿using System.Buffers.Binary;
 using System.IO.Hashing;
 using System.Runtime.InteropServices;
 using System.Text;
@@ -163,6 +163,7 @@ public static class SnapshotSerializer
         if (hasRecords)
             for (int e = 0; e < n; e++)
                 if (records[e] >= 0) v.SetRecordCore(e, records[e]);
+        v.TrimExcess();
         v.IsDirty = false;
         return v;
     }

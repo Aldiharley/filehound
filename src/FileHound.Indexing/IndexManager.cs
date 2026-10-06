@@ -111,8 +111,12 @@ public sealed class IndexManager : IAsyncDisposable
             Task[] work;
             lock (_gate) work = _slots.Values.Select(s => s.Work).ToArray();
             await Task.WhenAll(work).ConfigureAwait(false);
-            lock (_gate) if (_slots.Values.All(s => s.Work.IsCompleted)) return;
+            lock (_gate)
+                if (_slots.Values.All(s => s.Work.IsCompleted)) break;
         }
+        // Resume on a fresh thread-pool turn: otherwise the caller continues inline inside the completing drive
+        // task, whose async frames still reference the superseded snapshot index until they unwind.
+        await Task.Yield();
     }
 
     public Task RescanAsync(char letter)
@@ -255,6 +259,7 @@ public sealed class IndexManager : IAsyncDisposable
             if (streaming) { Update(slot, s => s with { Entries = p.Entries, Progress = p.Fraction, Skipped = p.Skipped }); RaiseIndexChanged(); }
         });
         var result = await walker.WalkAsync(v, drive.Root, VolumeIndex.RootEntry, progress, ct).ConfigureAwait(false);
+        v.TrimExcess();
         if (!streaming) Publish(slot, v);
         Log?.Invoke($"Indexing {drive.Letter}: walked {result.Entries:N0} entries in {sw.Elapsed.TotalSeconds:F1}s ({result.Skipped} skipped)");
 

@@ -195,6 +195,43 @@ public sealed class VolumeIndex
         finally { Lock.ExitWriteLock(); }
     }
 
+    /// <summary>Approximate managed bytes held by this index's arrays.</summary>
+    public long ApproximateBytes =>
+        (long)_parent.Length * (4 + 4 + 4 + 4 + 2 + 2 + 1 + 1 + 8 + 8 + 8) + (long)_names.Length * 4 +
+        (_recordMap?.Length ?? 0) * 4L + (_entryRecord?.Length ?? 0) * 8L;
+
+    /// <summary>Shrinks the arrays to their used size (plus a little slack) after a bulk build.</summary>
+    public void TrimExcess()
+    {
+        Lock.EnterWriteLock();
+        try
+        {
+            int cap = _count + 1024;
+            if (cap < _parent.Length)
+            {
+                Array.Resize(ref _parent, cap);
+                Array.Resize(ref _firstChild, cap);
+                Array.Resize(ref _nextSibling, cap);
+                Array.Resize(ref _nameStart, cap);
+                Array.Resize(ref _nameLen, cap);
+                Array.Resize(ref _flags, cap);
+                Array.Resize(ref _category, cap);
+                Array.Resize(ref _depth, cap);
+                Array.Resize(ref _mask, cap);
+                Array.Resize(ref _size, cap);
+                Array.Resize(ref _modified, cap);
+                if (_entryRecord is not null) Array.Resize(ref _entryRecord, cap);
+            }
+            int arenaCap = _arenaLength + 16 * 1024;
+            if (arenaCap < _names.Length)
+            {
+                Array.Resize(ref _names, arenaCap);
+                Array.Resize(ref _fold, arenaCap);
+            }
+        }
+        finally { Lock.ExitWriteLock(); }
+    }
+
     // ---------------------------------------------------------------- lookups
 
     /// <summary>Live child of <paramref name="parent"/> with the given name (case-insensitive), or -1.</summary>

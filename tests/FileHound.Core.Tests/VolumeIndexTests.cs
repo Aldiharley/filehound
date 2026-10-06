@@ -158,6 +158,20 @@ public class VolumeIndexTests
     }
 
     [Fact]
+    public void TrimExcess_keeps_data_and_allows_growth()
+    {
+        var v = new VolumeIndex(@"C:\", IndexMode.Turbo, 10_000);
+        for (int i = 0; i < 100; i++) v.Add(0, $"file{i}.txt", 0, i, i, recordNo: 1000 + i);
+        long before = v.ApproximateBytes;
+        v.TrimExcess();
+        Assert.True(v.ApproximateBytes < before);
+        Assert.Equal("file99.txt", v.Name(100).ToString());
+        Assert.Equal(100, v.FindByRecord(1099));
+        int e = v.Add(0, "after-trim.txt", 0, 0, 0);
+        Assert.Equal(e, v.FindByPath(@"C:\after-trim.txt"));
+    }
+
+    [Fact]
     public void Metadata_update_sets_flag()
     {
         var v = new VolumeIndex(@"C:\", IndexMode.Turbo);

@@ -1,4 +1,4 @@
-namespace FileHound.Core.Index;
+﻿namespace FileHound.Core.Index;
 
 /// <summary>
 /// Bulk, lock-free construction of a <see cref="VolumeIndex"/> from (record, parentRecord) pairs that may arrive in any
@@ -49,6 +49,7 @@ public sealed class VolumeIndexBuilder
             parents[e] = p; // -1 => orphan, handled by FinalizeStructure
         }
         v.FinalizeStructure(parents);
+        v.TrimExcess();
         v.IsDirty = true;
         return v;
     }

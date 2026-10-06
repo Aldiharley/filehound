@@ -1,4 +1,4 @@
-using FileHound.Core.Search;
+﻿using FileHound.Core.Search;
 
 namespace FileHound.Indexing.Tests;
 
@@ -52,6 +52,36 @@ public sealed class IndexManagerTests : IDisposable
         await m2.WaitForIdleAsync();
         Assert.Equal(1, Count(m2, "budget.xlsx"));
     }
+
+    [Fact]
+    public async Task Old_snapshot_index_is_released_after_refresh()
+    {
+        _tree.File(@"docs\budget.xlsx", 10);
+        await using (var m = new IndexManager(Options()))
+        {
+            await m.StartAsync();
+            await m.WaitForIdleAsync();
+            await m.SaveSnapshotsAsync();
+        }
+
+        await using var m2 = new IndexManager(Options());
+        await m2.StartAsync();
+        var weak = WeakFirstVolume(m2);
+        await m2.WaitForIdleAsync();
+        Assert.False(IsCurrentVolume(weak, m2), "refresh should have swapped in a new index");
+        for (int i = 0; i < 3; i++)
+        {
+            GC.Collect(2, GCCollectionMode.Forced, blocking: true);
+            GC.WaitForPendingFinalizers();
+        }
+        Assert.False(weak.IsAlive, "snapshot index is still referenced after the refresh swap");
+    }
+
+    [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
+    private static WeakReference WeakFirstVolume(IndexManager m) => new(m.Volumes[0]);
+
+    [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
+    private static bool IsCurrentVolume(WeakReference weak, IndexManager m) => ReferenceEquals(weak.Target, m.Volumes[0]);
 
     [Fact]
     public async Task Live_change_raises_IndexChanged()

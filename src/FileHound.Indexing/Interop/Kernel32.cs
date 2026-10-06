@@ -35,6 +35,26 @@ internal static unsafe partial class Kernel32
     public static partial bool GetVolumeInformation(string rootPathName, char* volumeNameBuffer, int volumeNameSize,
         out uint volumeSerialNumber, out uint maximumComponentLength, out uint fileSystemFlags, char* fileSystemNameBuffer, int fileSystemNameSize);
 
+    public const uint FILE_READ_ATTRIBUTES = 0x80;
+    public const uint FILE_SHARE_DELETE = 0x4;
+
+    [LibraryImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static partial bool GetFileInformationByHandle(SafeFileHandle file, byte* info);
+
+    /// <summary>NTFS MFT record number of a file or folder (low 48 bits of its file reference number).</summary>
+    public static bool TryGetRecordNumber(string path, out long recordNo)
+    {
+        recordNo = -1;
+        using var h = CreateFile(path, FILE_READ_ATTRIBUTES, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, 0, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, 0);
+        if (h.IsInvalid) return false;
+        byte* info = stackalloc byte[52]; // BY_HANDLE_FILE_INFORMATION
+        if (!GetFileInformationByHandle(h, info)) return false;
+        ulong frn = ((ulong)*(uint*)(info + 44) << 32) | *(uint*)(info + 48);
+        recordNo = (long)(frn & 0x0000_FFFF_FFFF_FFFF);
+        return true;
+    }
+
     /// <summary>Opens a volume handle such as <c>\\.\C:</c> (requires elevation).</summary>
     public static SafeFileHandle OpenVolume(char letter) =>
         CreateFile($@"\\.\{char.ToUpperInvariant(letter)}:", GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, 0, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, 0);

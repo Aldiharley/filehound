@@ -45,6 +45,7 @@ public sealed class IndexManager : IAsyncDisposable
         public Task Work = Task.CompletedTask;
         public readonly SemaphoreSlim Gate = new(1, 1);
         public int RescanQueued;
+        public DateTime LastOverflowRescan;
     }
 
     private readonly IndexOptions _options;
@@ -102,7 +103,7 @@ public sealed class IndexManager : IAsyncDisposable
         var loads = new List<Task>();
         foreach (var d in drives)
         {
-            var slot = new Slot(d);
+            var slot = new Slot(d) { Cts = NewSlotCts() };
             lock (_gate) _slots[d.Letter] = slot;
             var loaded = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
             loads.Add(loaded.Task);
@@ -142,20 +143,25 @@ public sealed class IndexManager : IAsyncDisposable
         lock (_gate) _slots.TryGetValue(char.ToUpperInvariant(letter), out slot);
         if (slot is null || _lifetime.IsCancellationRequested) return;
         if (Interlocked.Exchange(ref slot.RescanQueued, 1) == 1) return; // one is already waiting to run
-        await slot.Gate.WaitAsync().ConfigureAwait(false);
+        try { await slot.Gate.WaitAsync(_lifetime.Token).ConfigureAwait(false); }
+        catch (OperationCanceledException) { return; }
         try
         {
             Volatile.Write(ref slot.RescanQueued, 0);
-            if (_lifetime.IsCancellationRequested) return;
+            if (_lifetime.IsCancellationRequested || slot.State.Status == DriveStatus.Offline) return;
             await StopSlotAsync(slot).ConfigureAwait(false);
-            slot.Cts.Dispose();
-            slot.Cts = new CancellationTokenSource();
+            if (_lifetime.IsCancellationRequested) return; // shutting down: don't start a run nobody will stop
+            slot.Cts = NewSlotCts();
             VolumeIndex? standIn;
             lock (_gate) standIn = slot.Index;
             StartDrive(slot, useSnapshot: false, standIn, loaded: null);
         }
+        catch (ObjectDisposedException) { /* manager disposed meanwhile */ }
         finally { slot.Gate.Release(); }
     }
+
+    /// <summary>Per-run token source, cancelled automatically when the manager shuts down.</summary>
+    private CancellationTokenSource NewSlotCts() => CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token);
 
     /// <summary>Fire-and-forget rescan request from an updater callback (never blocks the caller's thread).</summary>
     private void RequestRescan(char letter, string reason)
@@ -282,8 +288,9 @@ public sealed class IndexManager : IAsyncDisposable
         if (needFill)
         {
             Update(slot, s => s with { Mode = IndexMode.Turbo, Status = DriveStatus.FillingDetails, Entries = v.LiveCount, Progress = 0, MetadataComplete = false });
+            // SetMetadata marks the index dirty only when something was actually filled, so folders that can
+            // never be listed don't force a snapshot rewrite on every launch.
             await new MetadataFiller().FillAsync(v, new Progress<double>(p => Update(slot, s => s with { Progress = p })), ct, onlyIncomplete: resumed).ConfigureAwait(false);
-            v.IsDirty = true;
         }
         Update(slot, s => s with { Mode = IndexMode.Turbo, Status = DriveStatus.Ready, Entries = v.LiveCount, Progress = 1, MetadataComplete = true, LastIndexed = DateTimeOffset.Now, Error = null });
         RaiseIndexChanged();
@@ -298,7 +305,8 @@ public sealed class IndexManager : IAsyncDisposable
         var v = new VolumeIndex(drive.Root, IndexMode.Standard, 1 << 16) { VolumeSerial = drive.Serial };
         bool streaming = previous is null;
         if (streaming) Publish(slot, v);
-        Update(slot, s => s with { Mode = IndexMode.Standard, Status = streaming ? DriveStatus.Scanning : DriveStatus.Ready, Progress = streaming ? 0 : 1, Error = null });
+        // Shown as Scanning either way; when refreshing, the previous index keeps answering searches meanwhile.
+        Update(slot, s => s with { Mode = IndexMode.Standard, Status = DriveStatus.Scanning, Progress = 0, Error = null });
 
         int workers = drive.IsRemovable ? 2 : Math.Min(Environment.ProcessorCount, 8);
         var walker = new DirectoryWalker(_excluded, workers);
@@ -310,7 +318,14 @@ public sealed class IndexManager : IAsyncDisposable
         {
             watcher = new WatcherUpdater(v, drive.Root, walker, TimeSpan.FromMilliseconds(500));
             watcher.Applied += (_, _) => RaiseIndexChanged();
-            watcher.Overflowed += (_, _) => RequestRescan(drive.Letter, "watcher overflow");
+            watcher.Overflowed += (_, _) =>
+            {
+                // Rate-limit: on a disk that churns faster than we can walk, rescanning in a loop would never settle.
+                var now = DateTime.UtcNow;
+                if (now - slot.LastOverflowRescan < TimeSpan.FromMinutes(10)) { Log?.Invoke($"Indexing {drive.Letter}: watcher lost events again; next rescan deferred"); return; }
+                slot.LastOverflowRescan = now;
+                RequestRescan(drive.Letter, "watcher lost events");
+            };
             try { watcher.Start(paused: true); }
             catch (Exception ex) when (ex is IOException or ArgumentException or PlatformNotSupportedException or UnauthorizedAccessException)
             {
@@ -326,7 +341,8 @@ public sealed class IndexManager : IAsyncDisposable
             var sw = System.Diagnostics.Stopwatch.StartNew();
             var progress = new Progress(p =>
             {
-                if (streaming) { Update(slot, s => s with { Entries = p.Entries, Progress = p.Fraction, Skipped = p.Skipped }); RaiseIndexChanged(); }
+                Update(slot, s => s with { Entries = streaming ? p.Entries : s.Entries, Progress = p.Fraction, Skipped = p.Skipped });
+                if (streaming) RaiseIndexChanged();
             });
             var result = await walker.WalkAsync(v, drive.Root, VolumeIndex.RootEntry, progress, ct).ConfigureAwait(false);
             ct.ThrowIfCancellationRequested();
@@ -430,8 +446,7 @@ public sealed class IndexManager : IAsyncDisposable
                     await s.Gate.WaitAsync(ct).ConfigureAwait(false);
                     try
                     {
-                        s.Cts.Dispose();
-                        s.Cts = new CancellationTokenSource();
+                        s.Cts = NewSlotCts();
                         StartDrive(s, useSnapshot: true, standIn: null, loaded: null);
                     }
                     finally { s.Gate.Release(); }
@@ -439,7 +454,7 @@ public sealed class IndexManager : IAsyncDisposable
                 }
                 foreach (var d in added)
                 {
-                    var slot = new Slot(d);
+                    var slot = new Slot(d) { Cts = NewSlotCts() };
                     lock (_gate) _slots[d.Letter] = slot;
                     Log?.Invoke($"Drive {d.Letter}: arrived");
                     StartDrive(slot, useSnapshot: true, standIn: null, loaded: null);
@@ -482,15 +497,19 @@ public sealed class IndexManager : IAsyncDisposable
 
     public async ValueTask DisposeAsync()
     {
-        _lifetime.Cancel();
+        _lifetime.Cancel(); // also cancels every slot's linked token source
         List<Slot> slots;
         lock (_gate) slots = _slots.Values.ToList();
-        foreach (var s in slots) s.Cts.Cancel();
+        // Wait for in-flight rescans to finish their (now cancelled) hand-over so no new run starts behind us.
+        foreach (var s in slots)
+        {
+            if (await s.Gate.WaitAsync(TimeSpan.FromSeconds(3)).ConfigureAwait(false)) s.Gate.Release();
+        }
         try { await Task.WhenAll(slots.Select(s => s.Work).Append(_pollLoop).Append(_snapshotLoop)).WaitAsync(TimeSpan.FromSeconds(5)).ConfigureAwait(false); }
         catch (Exception ex) when (ex is OperationCanceledException or TimeoutException) { }
         foreach (var s in slots) DisposeUpdater(s);
         await SaveSnapshotsAsync().ConfigureAwait(false);
-        _lifetime.Dispose();
+        // _lifetime is intentionally not disposed: late rescan requests may still observe its token.
     }
 
     private sealed class Progress(Action<ScanProgress> report) : IProgress<ScanProgress>

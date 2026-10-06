@@ -49,21 +49,42 @@ public sealed class WatcherUpdater : IDisposable
             InternalBufferSize = 256 * 1024,
             NotifyFilter = NotifyFilters.FileName | NotifyFilters.DirectoryName | NotifyFilters.Size | NotifyFilters.LastWrite | NotifyFilters.Attributes,
         };
-        _watcher.Created += (_, e) => _queue.Enqueue(new Change(Kind.Created, e.FullPath, null));
-        _watcher.Deleted += (_, e) => _queue.Enqueue(new Change(Kind.Deleted, e.FullPath, null));
-        _watcher.Changed += (_, e) => _queue.Enqueue(new Change(Kind.Changed, e.FullPath, null));
-        _watcher.Renamed += (_, e) => _queue.Enqueue(new Change(Kind.Renamed, e.FullPath, e.OldFullPath));
-        _watcher.Error += (_, e) =>
-        {
-            // Only a lost-events overflow makes the index stale; while paused the walk is still reading the disk anyway.
-            if (!_paused && e.GetException() is InternalBufferOverflowException) Overflowed?.Invoke(this, EventArgs.Empty);
-        };
+        _watcher.Created += (_, e) => Enqueue(new Change(Kind.Created, e.FullPath, null));
+        _watcher.Deleted += (_, e) => Enqueue(new Change(Kind.Deleted, e.FullPath, null));
+        _watcher.Changed += (_, e) => Enqueue(new Change(Kind.Changed, e.FullPath, null));
+        _watcher.Renamed += (_, e) => Enqueue(new Change(Kind.Renamed, e.FullPath, e.OldFullPath));
+        // Any error (buffer overflow or a broken watch) means events were or will be lost: the index needs a rescan.
+        _watcher.Error += (_, _) => SignalLost();
         _watcher.EnableRaisingEvents = true;
         _loop = Task.Run(LoopAsync);
     }
 
+    /// <summary>Upper bound on queued changes; beyond it we stop queueing and ask for a rescan instead.</summary>
+    public const int MaxQueuedChanges = 200_000;
+    private int _lostWhilePaused;
+
+    private void Enqueue(Change c)
+    {
+        if (_queue.Count >= MaxQueuedChanges) { SignalLost(); return; }
+        _queue.Enqueue(c);
+    }
+
+    private void SignalLost()
+    {
+        if (_paused) Volatile.Write(ref _lostWhilePaused, 1); // reported once on Resume
+        else Overflowed?.Invoke(this, EventArgs.Empty);
+    }
+
     /// <summary>Starts applying changes, beginning with everything queued while paused.</summary>
-    public void Resume() => _paused = false;
+    public void Resume()
+    {
+        _paused = false;
+        if (Interlocked.Exchange(ref _lostWhilePaused, 0) == 1)
+        {
+            _queue.Clear();
+            Overflowed?.Invoke(this, EventArgs.Empty);
+        }
+    }
 
     private async Task LoopAsync()
     {

@@ -484,3 +484,7 @@ $RECYCLE.BIN/
 # Raw Higgsfield renders (reproducible via tools/assets/generate.ps1)
 assets-src/
 
+
+# Claude Code session files
+.claude/*.lock
+

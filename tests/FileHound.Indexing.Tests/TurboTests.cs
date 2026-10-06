@@ -67,6 +67,43 @@ public sealed class TurboTests : IDisposable
     }
 
     [Fact]
+    public void UsnUpdater_restored_directory_gets_its_subtree_back()
+    {
+        _t.File(@"proj\src\main.cs", 5);
+        _t.File(@"proj\readme.md", 3);
+        var b = new VolumeIndexBuilder(_t.Root, IndexMode.Turbo);
+        b.AddRecord(10, 5, "proj", EntryFlags.Directory);
+        b.AddRecord(11, 10, "src", EntryFlags.Directory);
+        b.AddRecord(12, 11, "main.cs", 0);
+        b.AddRecord(13, 10, "readme.md", 0);
+        var index = b.Build();
+        using var updater = new UsnUpdater(index, 'Q', TimeSpan.FromSeconds(1));
+
+        // Deleted to the Recycle Bin (unknown parent) …
+        updater.ApplyBuffer(UsnRecordParserTests.V2(10, 999, "$R1.proj", UsnReason.RenameNewName | UsnReason.Close, 0x10));
+        Assert.Equal(-1, index.FindByPath(_t.Path(@"proj\src\main.cs")));
+
+        // … and restored: only the folder gets a journal record; its subtree must come back from disk.
+        updater.ApplyBuffer(UsnRecordParserTests.V2(10, 5, "proj", UsnReason.RenameNewName | UsnReason.Close, 0x10));
+        int main = index.FindByPath(_t.Path(@"proj\src\main.cs"));
+        Assert.True(main > 0);
+
+        // The rebuilt subtree is mapped to the files' real NTFS record numbers, so later journal records resolve.
+        Assert.True(Kernel32.TryGetRecordNumber(_t.Path(@"proj\src\main.cs"), out long mainRec));
+        Assert.True(Kernel32.TryGetRecordNumber(_t.Path(@"proj\src"), out long srcRec));
+        Assert.True(Kernel32.TryGetRecordNumber(_t.Path(@"proj\readme.md"), out long readmeRec));
+        Assert.Equal(main, index.FindByRecord(mainRec));
+        updater.ApplyBuffer(UsnRecordParserTests.V2((ulong)mainRec, (ulong)srcRec, "main.cs", UsnReason.DataExtend | UsnReason.Close));
+        Assert.Equal(main, index.FindByRecord(mainRec));
+        updater.ApplyBuffer(UsnRecordParserTests.V2((ulong)readmeRec, 10, "readme.md", UsnReason.FileDelete | UsnReason.Close));
+        Assert.Equal(-1, index.FindByPath(_t.Path(@"proj\readme.md")));
+        int count = 0;
+        int src = index.FindByPath(_t.Path(@"proj\src"));
+        for (int c = index.FirstChild(src); c > 0; c = index.NextSibling(c)) if (index.IsLive(c)) count++;
+        Assert.Equal(1, count); // no duplicates
+    }
+
+    [Fact]
     public void UsnUpdater_ignores_cyclic_move()
     {
         var index = new VolumeIndex(@"Q:\", IndexMode.Turbo);

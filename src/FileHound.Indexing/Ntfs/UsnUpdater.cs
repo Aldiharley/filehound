@@ -93,13 +93,26 @@ public sealed class UsnUpdater : IDisposable
     {
         int changes = 0;
         var refresh = new List<int>();
+        var restoredDirs = new List<int>();
         _index.Lock.EnterWriteLock();
         try
         {
             while (UsnRecordParser.TryRead(records, out var rec))
             {
                 records = records[rec.Length..];
+                int parent = rec.ParentRecordNo == RootRecord ? VolumeIndex.RootEntry : _index.FindByRecord(rec.ParentRecordNo);
+                bool parentIndexed = parent == VolumeIndex.RootEntry || _index.IsLive(parent);
                 int e = _index.FindByRecord(rec.RecordNo);
+                if (e < 0 && parentIndexed)
+                {
+                    // Unmapped but present by name (e.g. re-walked after a restore): adopt it.
+                    int byName = _index.FindChild(parent, rec.Name);
+                    if (byName > 0 && _index.RecordOf(byName) < 0)
+                    {
+                        _index.SetRecord(byName, rec.RecordNo);
+                        e = byName;
+                    }
+                }
                 if ((rec.Reason & UsnReason.FileDelete) != 0)
                 {
                     if (e > 0) { _index.Delete(e); changes++; }
@@ -107,8 +120,6 @@ public sealed class UsnUpdater : IDisposable
                 }
                 if ((rec.Reason & (UsnReason.FileCreate | UsnReason.RenameNewName)) != 0 || e <= 0)
                 {
-                    int parent = rec.ParentRecordNo == RootRecord ? VolumeIndex.RootEntry : _index.FindByRecord(rec.ParentRecordNo);
-                    bool parentIndexed = parent == VolumeIndex.RootEntry || _index.IsLive(parent);
                     bool skippedName = rec.ParentRecordNo == RootRecord && MftScanner.IsSkippedRootName(rec.Name);
                     if (!parentIndexed || skippedName)
                     {
@@ -126,6 +137,9 @@ public sealed class UsnUpdater : IDisposable
                     else
                     {
                         e = _index.Add(parent, rec.Name, flags, 0, 0, rec.RecordNo);
+                        // A directory appearing from outside the tree (Recycle Bin restore, move-in) brings a subtree
+                        // that has no journal records of its own: rebuild it from disk below.
+                        if (rec.IsDirectory && (rec.Reason & UsnReason.FileCreate) == 0) restoredDirs.Add(e);
                     }
                     changes++;
                     refresh.Add(e);
@@ -141,8 +155,47 @@ public sealed class UsnUpdater : IDisposable
         }
         finally { _index.Lock.ExitWriteLock(); }
 
+        foreach (int dir in restoredDirs) RebuildSubtree(dir);
         foreach (int e in refresh) RefreshMetadata(e);
         return changes;
+    }
+
+    /// <summary>Walks a directory that re-entered the tree and maps every new entry to its NTFS record number.</summary>
+    private void RebuildSubtree(int dir)
+    {
+        string path;
+        _index.Lock.EnterReadLock();
+        try
+        {
+            if (!_index.IsLive(dir)) return;
+            path = PathBuilder.GetFullPath(_index, dir);
+        }
+        finally { _index.Lock.ExitReadLock(); }
+        try
+        {
+            new DirectoryWalker([], 2).WalkAsync(_index, path, dir, null, _cts.Token).GetAwaiter().GetResult();
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or OperationCanceledException) { return; }
+
+        var stack = new Stack<(int Entry, string Path)>();
+        stack.Push((dir, path));
+        while (stack.Count > 0)
+        {
+            var (d, dPath) = stack.Pop();
+            var children = new List<(int, string)>();
+            _index.Lock.EnterReadLock();
+            try
+            {
+                for (int c = _index.FirstChild(d); c > 0; c = _index.NextSibling(c))
+                    if (_index.IsLive(c)) children.Add((c, Path.Combine(dPath, _index.Name(c).ToString())));
+            }
+            finally { _index.Lock.ExitReadLock(); }
+            foreach (var (c, cPath) in children)
+            {
+                if (Kernel32.TryGetRecordNumber(cPath, out long recordNo)) _index.SetRecord(c, recordNo);
+                if (_index.IsDirectory(c)) stack.Push((c, cPath));
+            }
+        }
     }
 
     private void RefreshMetadata(int e)

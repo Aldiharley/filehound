@@ -87,4 +87,7 @@ public class DriveDiscoveryTests
         var drives = DriveDiscovery.GetDrives();
         Assert.Contains(drives, d => d.Letter == 'C' && d.Root == @"C:\" && d.Serial != 0);
     }
+
+    [Fact]
+    public void System_drive_is_not_external() => Assert.False(DriveDiscovery.IsExternalBus('C'));
 }

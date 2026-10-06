@@ -1,4 +1,4 @@
-using System.Collections.Frozen;
+﻿using System.Collections.Frozen;
 using FileHound.Core.Index;
 
 namespace FileHound.Core.Query;
@@ -13,7 +13,7 @@ public sealed class SystemClock : IClock
 
 public enum TermKind : byte
 {
-    /// <summary>Matched against the name with tiered (exact → typo) matching.</summary>
+    /// <summary>Matched against the name with tiered (exact â†’ typo) matching.</summary>
     Plain,
     /// <summary>Contains * or ?; must match the whole name.</summary>
     Wildcard,
@@ -78,7 +78,10 @@ public sealed class Term
 }
 
 public abstract record Filter;
-public sealed record ExtFilter(FrozenSet<string> Extensions) : Filter;
+public sealed record ExtFilter(FrozenSet<string> Extensions) : Filter
+{
+    public FrozenSet<string>.AlternateLookup<ReadOnlySpan<char>> Lookup { get; } = Extensions.GetAlternateLookup<ReadOnlySpan<char>>();
+}
 public sealed record CategoryFilter(FileCategory[] Categories) : Filter;
 /// <summary><c>Folders</c> true = folders only; false = files only.</summary>
 public sealed record KindFilter(bool Folders) : Filter;

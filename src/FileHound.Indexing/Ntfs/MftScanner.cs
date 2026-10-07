@@ -36,15 +36,43 @@ public sealed class MftScanner
     public TimeSpan ParseTime { get; private set; }
     public TimeSpan BuildTime { get; private set; }
 
+    /// <summary>Try the raw $MFT reader first (names, sizes and dates in one pass). Default true.</summary>
+    public bool PreferRaw { get; init; } = true;
+    /// <summary>True when the last scan used <see cref="RawMftReader"/>; false when it used FSCTL_ENUM_USN_DATA.</summary>
+    public bool UsedRawReader { get; private set; }
+    /// <summary>Why the raw reader was not used for the last scan (null when it was, or wasn't tried).</summary>
+    public string? FallbackReason { get; private set; }
+
     public unsafe VolumeIndex Scan(DriveDescriptor drive, IReadOnlyCollection<string> excluded, IProgress<ScanProgress>? progress, CancellationToken ct)
     {
         long ioTicks = 0, parseTicks = 0;
+        UsedRawReader = false;
+        FallbackReason = null;
         using var h = Kernel32.OpenVolume(drive.Letter);
         if (h.IsInvalid) throw new Win32Exception(Marshal.GetLastPInvokeError(), $"Cannot open volume {drive.Letter}:");
 
+        // Captured before reading: the USN updater replays everything that changes while we scan.
         UsnJournalDataV1 jd;
         if (!Kernel32.DeviceIoControl(h, Kernel32.FSCTL_QUERY_USN_JOURNAL, null, 0, &jd, sizeof(UsnJournalDataV1), out _, 0))
             throw new Win32Exception(Marshal.GetLastPInvokeError(), $"No USN journal on {drive.Letter}:");
+
+        if (PreferRaw)
+        {
+            try
+            {
+                var raw = new RawMftReader();
+                var rv = raw.Read(h, drive, progress, ct);
+                UsedRawReader = true;
+                IoTime = raw.IoTime;
+                ParseTime = raw.ParseTime;
+                BuildTime = raw.BuildTime;
+                return Finish(rv, jd, drive, excluded, progress);
+            }
+            catch (Exception ex) when (ex is NotSupportedException or InvalidDataException or IOException or Win32Exception)
+            {
+                FallbackReason = ex.Message; // fall through to FSCTL_ENUM_USN_DATA
+            }
+        }
 
         long totalRecords = EstimateRecordCount(h);
         var builder = new VolumeIndexBuilder(drive.Root, IndexMode.Turbo, (int)Math.Clamp(totalRecords, 1 << 16, 1 << 26));
@@ -96,6 +124,11 @@ public sealed class MftScanner
         long b0 = System.Diagnostics.Stopwatch.GetTimestamp();
         var v = builder.Build(RootRecord);
         BuildTime = System.Diagnostics.Stopwatch.GetElapsedTime(b0);
+        return Finish(v, jd, drive, excluded, progress);
+    }
+
+    private static VolumeIndex Finish(VolumeIndex v, UsnJournalDataV1 jd, DriveDescriptor drive, IReadOnlyCollection<string> excluded, IProgress<ScanProgress>? progress)
+    {
         v.UsnJournalId = jd.UsnJournalID;
         v.NextUsn = jd.NextUsn;
         v.VolumeSerial = drive.Serial;

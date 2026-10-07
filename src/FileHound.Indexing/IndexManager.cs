@@ -254,13 +254,11 @@ public sealed class IndexManager : IAsyncDisposable
     {
         var drive = slot.Drive;
         VolumeIndex v;
-        bool resumed = false;
         if (snapshot is { Mode: IndexMode.Turbo } &&
             MftScanner.TryQueryJournal(drive.Letter, out ulong journalId, out long firstUsn, out _) &&
             journalId == snapshot.UsnJournalId && snapshot.NextUsn >= firstUsn)
         {
             v = snapshot;
-            resumed = true;
             ApplyExclusions(v, drive);
             Log?.Invoke($"Indexing {drive.Letter}: resuming USN journal from snapshot");
         }
@@ -270,10 +268,12 @@ public sealed class IndexManager : IAsyncDisposable
             var sw = System.Diagnostics.Stopwatch.StartNew();
             var progress = new Progress(p => Update(slot, s => s with { Entries = p.Entries, Progress = p.Fraction }));
             var excluded = _excluded;
-            v = await Task.Run(() => new MftScanner().Scan(drive, excluded, progress, ct), ct).ConfigureAwait(false);
+            var scanner = new MftScanner();
+            v = await Task.Run(() => scanner.Scan(drive, excluded, progress, ct), ct).ConfigureAwait(false);
+            if (scanner.FallbackReason is not null) Log?.Invoke($"Indexing {drive.Letter}: raw $MFT reader unavailable ({scanner.FallbackReason}); used FSCTL_ENUM_USN_DATA");
             ct.ThrowIfCancellationRequested();
             Publish(slot, v);
-            Log?.Invoke($"Indexing {drive.Letter}: MFT scan {v.LiveCount:N0} entries in {sw.Elapsed.TotalSeconds:F1}s");
+            Log?.Invoke($"Indexing {drive.Letter}: MFT scan ({(scanner.UsedRawReader ? "raw $MFT" : "enumeration")}) {v.LiveCount:N0} entries in {sw.Elapsed.TotalSeconds:F1}s");
         }
 
         ct.ThrowIfCancellationRequested();
@@ -283,14 +283,14 @@ public sealed class IndexManager : IAsyncDisposable
         slot.Updater = usn;
         usn.Start();
 
-        // A resumed snapshot may have been saved mid-fill: complete just the directories still missing metadata.
-        bool needFill = !resumed || MetadataFiller.HasIncompleteMetadata(v);
+        // The raw $MFT reader delivers sizes and dates itself; enumeration (or a snapshot saved mid-fill) does not.
+        bool needFill = MetadataFiller.HasIncompleteMetadata(v);
         if (needFill)
         {
             Update(slot, s => s with { Mode = IndexMode.Turbo, Status = DriveStatus.FillingDetails, Entries = v.LiveCount, Progress = 0, MetadataComplete = false });
             // SetMetadata marks the index dirty only when something was actually filled, so folders that can
             // never be listed don't force a snapshot rewrite on every launch.
-            await new MetadataFiller().FillAsync(v, new Progress<double>(p => Update(slot, s => s with { Progress = p })), ct, onlyIncomplete: resumed).ConfigureAwait(false);
+            await new MetadataFiller().FillAsync(v, new Progress<double>(p => Update(slot, s => s with { Progress = p })), ct, onlyIncomplete: true).ConfigureAwait(false);
         }
         Update(slot, s => s with { Mode = IndexMode.Turbo, Status = DriveStatus.Ready, Entries = v.LiveCount, Progress = 1, MetadataComplete = true, LastIndexed = DateTimeOffset.Now, Error = null });
         RaiseIndexChanged();

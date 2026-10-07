@@ -35,24 +35,67 @@ if (command == "turbo-validate")
 
 if (command == "turbo-bench")
 {
-    // filehound-cli turbo-bench C --report <file>   (must run elevated): times MFT scans with a breakdown
-    char letter = char.ToUpperInvariant((rest.FirstOrDefault() ?? "C")[0]);
+    // filehound-cli turbo-bench C F M --report <file>   (must run elevated)
+    // Per drive: raw $MFT scan first (cold if the MFT isn't cached), then enumeration + metadata fill,
+    // then a warm raw scan; compares entry counts, path sets and sizes between the two methods.
+    var letters = rest.Count > 0 ? rest.Select(s => char.ToUpperInvariant(s[0])).ToList() : ['C'];
     string report = TakeOption(argList, "--report") ?? Path.Combine(Path.GetTempPath(), "filehound-turbo-bench.txt");
-    var lines = new List<string> { $"elevated={Elevation.IsElevated}" };
-    try
+    var lines = new List<string> { $"elevated={Elevation.IsElevated}  {DateTime.Now:yyyy-MM-dd HH:mm:ss}" };
+    void Line(string s) { lines.Add(s); File.WriteAllLines(report, lines); }
+    foreach (var letter in letters)
     {
-        var drive = DriveDiscovery.GetDrives().Single(d => d.Letter == letter);
-        for (int run = 1; run <= 3; run++)
+        try
         {
-            var scanner = new FileHound.Indexing.Ntfs.MftScanner();
-            var swb = Stopwatch.StartNew();
-            var v = scanner.Scan(drive, [], null, CancellationToken.None);
-            lines.Add($"run {run}: {v.LiveCount:N0} entries in {swb.Elapsed.TotalSeconds:F2}s  (ioctl {scanner.IoTime.TotalSeconds:F2}s, parse+add {scanner.ParseTime.TotalSeconds:F2}s, build {scanner.BuildTime.TotalSeconds:F2}s)");
+            var drive = DriveDiscovery.GetDrives().Single(d => d.Letter == letter);
+            Line($"== {letter}: ({drive.Format}, {drive.TotalSize / 1e12:F1} TB)");
+            (VolumeIndex V, FileHound.Indexing.Ntfs.MftScanner S, double Secs) Scan(bool raw)
+            {
+                var s = new FileHound.Indexing.Ntfs.MftScanner { PreferRaw = raw };
+                var sw = Stopwatch.StartNew();
+                var v = s.Scan(drive, [], null, CancellationToken.None);
+                return (v, s, sw.Elapsed.TotalSeconds);
+            }
+
+            var raw1 = Scan(raw: true);
+            Line($"raw #1 (cold-ish): {raw1.V.LiveCount:N0} entries in {raw1.Secs:F2}s  used raw={raw1.S.UsedRawReader} {raw1.S.FallbackReason}  (io {raw1.S.IoTime.TotalSeconds:F2}s, parse {raw1.S.ParseTime.TotalSeconds:F2}s, build {raw1.S.BuildTime.TotalSeconds:F2}s)  incomplete metadata={MetadataFiller.HasIncompleteMetadata(raw1.V)}");
+            var en = Scan(raw: false);
             var swf = Stopwatch.StartNew();
-            if (run == 1) { await new MetadataFiller().FillAsync(v, null, CancellationToken.None); lines.Add($"run {run}: metadata fill {swf.Elapsed.TotalSeconds:F2}s"); }
+            await new MetadataFiller().FillAsync(en.V, null, CancellationToken.None);
+            Line($"enum:              {en.V.LiveCount:N0} entries in {en.Secs:F2}s + metadata fill {swf.Elapsed.TotalSeconds:F2}s");
+            var raw2 = Scan(raw: true);
+            Line($"raw #2 (warm):     {raw2.V.LiveCount:N0} entries in {raw2.Secs:F2}s  (io {raw2.S.IoTime.TotalSeconds:F2}s, parse {raw2.S.ParseTime.TotalSeconds:F2}s, build {raw2.S.BuildTime.TotalSeconds:F2}s)");
+
+            // Agreement: paths from the enumeration index must exist in the raw index, sizes must match the disk.
+            var rnd = new Random(1);
+            int pathChecked = 0, pathMissing = 0, sizeChecked = 0, sizeMismatch = 0, sizeChanged = 0;
+            var missingExamples = new List<string>();
+            for (int i = 0; i < 20000 && pathChecked < 2000; i++)
+            {
+                int e = rnd.Next(1, en.V.Count);
+                if (!en.V.IsLive(e)) continue;
+                var p = PathBuilder.GetFullPath(en.V, e);
+                pathChecked++;
+                if (raw2.V.FindByPath(p) < 0) { pathMissing++; if (missingExamples.Count < 5) missingExamples.Add(p); }
+            }
+            for (int i = 0; i < 40000 && sizeChecked < 2000; i++)
+            {
+                int e = rnd.Next(1, raw2.V.Count);
+                if (!raw2.V.IsLive(e) || raw2.V.IsDirectory(e)) continue;
+                var p = PathBuilder.GetFullPath(raw2.V, e);
+                FileInfo fi;
+                try { fi = new FileInfo(p); if (!fi.Exists) continue; } catch (Exception) { continue; }
+                sizeChecked++;
+                if (fi.Length != raw2.V.Size(e))
+                {
+                    // Files being written right now (logs, databases) legitimately differ; re-stat to tell.
+                    if (fi.LastWriteTimeUtc > DateTime.UtcNow.AddMinutes(-10)) sizeChanged++; else sizeMismatch++;
+                }
+            }
+            Line($"agreement: entries raw/enum {(double)raw2.V.LiveCount / Math.Max(1, en.V.LiveCount):P2}; paths {pathChecked - pathMissing}/{pathChecked} found; sizes {sizeChecked - sizeMismatch - sizeChanged}/{sizeChecked} equal ({sizeChanged} recently modified, {sizeMismatch} mismatched)");
+            foreach (var m in missingExamples) Line($"   missing in raw: {m}");
         }
+        catch (Exception ex) { Line($"error on {letter}: {ex}"); }
     }
-    catch (Exception ex) { lines.Add("error: " + ex); }
     File.WriteAllLines(report, lines);
     return 0;
 }

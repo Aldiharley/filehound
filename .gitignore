@@ -488,3 +488,6 @@ assets-src/
 # Claude Code session files
 .claude/*.lock
 
+
+# Release staging (zip + checksums built from publish/)
+release/

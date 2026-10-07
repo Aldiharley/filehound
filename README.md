@@ -24,6 +24,23 @@ FileHound indexes every file and folder on all your local drives (C:, D:, E:, US
 - **Fast restarts.** Each drive's index is saved as a compact binary snapshot, and 4 million entries load in about 1 second.
 - **Everything-style query syntax** with category chips, sorting and match highlighting.
 - **Built for the keyboard.** Global hotkey, tray icon, Enter to open, Ctrl+Enter to open the containing folder, Ctrl+Shift+C to copy the path, and drag a result out to Explorer.
+- **Self-healing.** If a live-update loop ever fails, FileHound says so and re-indexes the drive instead of quietly going stale.
+
+## Install
+
+1. Download `FileHound.exe` from the [latest release](https://github.com/Aldiharley/filehound/releases/latest). It is self-contained: no .NET install is needed.
+2. Put it anywhere you like (for example `%LOCALAPPDATA%\Programs\FileHound`) and run it. Windows SmartScreen may warn the first time because the file is not code-signed; choose **More info → Run anyway**.
+3. Press **Ctrl+Alt+Space** to search. Turn on **Start with Windows** in Settings so the hotkey is always ready.
+
+FileHound greets you by your Windows display name. Change it, or clear it to go back to automatic, under **Settings → General → Your name**.
+
+To check a download, compare its hash with `SHA256SUMS.txt` from the same release:
+
+```powershell
+Get-FileHash .\FileHound.exe -Algorithm SHA256
+```
+
+Data lives in `%LOCALAPPDATA%\FileHound`: `settings.json`, the `index\*.fhx` snapshots, and `logs\`. To uninstall, exit FileHound from the tray, delete the exe and that folder, and turn off **Start with Windows** first if you had enabled it.
 
 ## Indexing modes
 
@@ -108,8 +125,6 @@ To publish a self-contained single-file executable:
 dotnet publish src/FileHound.App -c Release -r win-x64 --self-contained -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -o publish
 ```
 
-Data lives in `%LOCALAPPDATA%\FileHound`: `settings.json`, the `index\*.fhx` snapshots, and `logs\`.
-
 ### Headless tools
 
 ```bash
@@ -136,6 +151,23 @@ tools/FileHound.Cli  headless scan / search / bench
 ```
 
 Design docs live in [`docs/superpowers/specs`](docs/superpowers/specs), the implementation plan in [`docs/superpowers/plans`](docs/superpowers/plans), and background research in [`docs/research`](docs/research).
+
+## Changelog
+
+### 1.1.0
+
+- **Greeting by name.** The sidebar uses your Windows display name (first name) and Settings → General gets a *Your name* override.
+- **Self-contained release build and `build.ps1`.** The script installs the .NET 10 SDK if it is missing, then builds, tests, publishes and installs. Any 10.0.x SDK now satisfies `global.json`.
+- **Safer Turbo mode.** Explorer is always launched by its full path, and Alt+Enter Properties is shown by the desktop's own Explorer instead of the elevated process, so nothing started from the sheet inherits admin rights.
+- **No overlap on the Turbo relaunch.** The old instance keeps its lock until snapshots and settings are saved; the elevated copy waits for it.
+- **Live updates report faults.** If the USN or FileSystemWatcher loop hits an unexpected error it is logged and the drive is re-indexed (at most once per ten minutes) instead of the index silently going stale.
+- **Walker can no longer hang.** An unexpected error in one worker fails the walk with that error instead of leaving the drive stuck in *Scanning*.
+- **MFT parser.** Bounds checks can no longer overflow on a corrupt record length; such records are skipped rather than knocking the drive back to Standard mode.
+- Superseded indexes are released sooner during a refresh, and the snapshot-release test no longer depends on garbage-collection timing.
+
+### 1.0.0
+
+Initial version: whole-disk indexing in Standard and Turbo modes, fuzzy search with Everything-style syntax, snapshots, tray and global hotkey.
 
 ## License
 

@@ -39,6 +39,12 @@
                                 <TextBlock Text="Keeps the index live in the background. Use the tray menu to exit." Style="{StaticResource Caption}" />
                             </StackPanel>
                         </CheckBox>
+                        <StackPanel Margin="0,10,0,2">
+                            <TextBlock Text="Your name" Style="{StaticResource BodyStrong}" />
+                            <TextBlock Text="{Binding DisplayNameHint}" Style="{StaticResource Caption}" TextWrapping="Wrap" />
+                            <TextBox Style="{StaticResource ClayTextBox}" Text="{Binding DisplayName, UpdateSourceTrigger=PropertyChanged}"
+                                     MaxLength="40" Width="320" HorizontalAlignment="Left" Margin="0,8,0,0" />
+                        </StackPanel>
                     </StackPanel>
                 </c:ClayCard>
 

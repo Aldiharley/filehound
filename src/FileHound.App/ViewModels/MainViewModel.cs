@@ -13,12 +13,12 @@ public sealed partial class MainViewModel : ObservableObject
     private readonly IndexManager _manager;
     private readonly DispatcherTimer _toastTimer;
 
-    public MainViewModel(IndexManager manager, bool isElevated)
+    /// <param name="userName">What to call the user; see <see cref="UserNames.Resolve"/>.</param>
+    public MainViewModel(IndexManager manager, bool isElevated, string? userName = null)
     {
         _manager = manager;
         IsElevated = isElevated;
-        var name = Environment.UserName.Split([' ', '.', '_'], StringSplitOptions.RemoveEmptyEntries).FirstOrDefault() ?? "";
-        UserName = name.Length > 0 ? char.ToUpperInvariant(name[0]) + name[1..] : "there";
+        _userName = userName ?? UserNames.Resolve(null);
         _toastTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(2.2) };
         _toastTimer.Tick += (_, _) => { IsToastVisible = false; _toastTimer.Stop(); };
         _manager.StateChanged += (_, _) => Application.Current?.Dispatcher.InvokeAsync(UpdateStatus);
@@ -31,7 +31,9 @@ public sealed partial class MainViewModel : ObservableObject
     public required SettingsViewModel Settings { get; init; }
 
     public bool IsElevated { get; }
-    public string UserName { get; }
+
+    /// <summary>Shown in the sidebar greeting; changes when the user picks a name in Settings.</summary>
+    [ObservableProperty, NotifyPropertyChangedFor(nameof(SidebarGreeting))] private string _userName;
     public string SidebarGreeting => $"Hi, {UserName}!";
 
     [ObservableProperty] private AppPage _currentPage = AppPage.Dashboard;

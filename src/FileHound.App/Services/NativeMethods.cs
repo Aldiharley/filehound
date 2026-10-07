@@ -17,6 +17,11 @@ internal static unsafe partial class NativeMethods
     [return: MarshalAs(UnmanagedType.Bool)]
     public static partial bool UnregisterHotKey(nint hWnd, int id);
 
+    /// <summary>Returns BOOLEAN (one byte). On success <paramref name="size"/> is the number of characters written, without the terminator.</summary>
+    [LibraryImport("secur32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.U1)]
+    public static partial bool GetUserNameExW(int nameFormat, char* buffer, ref uint size);
+
     [LibraryImport("user32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]
     public static partial bool SetForegroundWindow(nint hWnd);

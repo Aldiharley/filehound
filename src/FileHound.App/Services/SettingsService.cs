@@ -10,6 +10,8 @@ public sealed class AppSettings
     public static readonly string[] FallbackHotkeys = ["Ctrl+Shift+Space", "Alt+Shift+Space", "Ctrl+Alt+F", "Ctrl+Shift+F12"];
 
     public string Hotkey { get; set; } = DefaultHotkey;
+    /// <summary>Name used in the greeting. Null means "work it out from the Windows account".</summary>
+    public string? DisplayName { get; set; }
     public bool Fuzzy { get; set; } = true;
     public bool IncludeHidden { get; set; } = true;
     public bool StartWithWindows { get; set; }

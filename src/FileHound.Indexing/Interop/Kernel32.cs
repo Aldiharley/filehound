@@ -47,12 +47,18 @@ internal static unsafe partial class Kernel32
     public static void ReadExactly(SafeFileHandle volume, long offset, byte* buffer, int length)
     {
         if (!SetFilePointerEx(volume, offset, out _, 0 /* FILE_BEGIN */))
-            throw new IOException($"Seek to {offset} failed", Marshal.GetHRForLastWin32Error());
+        {
+            int seekErr = Marshal.GetLastPInvokeError();
+            throw new IOException($"Seek to {offset} failed: Win32 error {seekErr} ({new System.ComponentModel.Win32Exception(seekErr).Message})");
+        }
         int done = 0;
         while (done < length)
         {
             if (!ReadFile(volume, buffer + done, length - done, out int read, 0))
-                throw new IOException($"Volume read at {offset + done} failed", Marshal.GetHRForLastWin32Error());
+            {
+                int err = Marshal.GetLastPInvokeError();
+                throw new IOException($"Volume read of {length - done} bytes at {offset + done} failed: Win32 error {err} ({new System.ComponentModel.Win32Exception(err).Message})");
+            }
             if (read == 0) throw new IOException($"Unexpected end of volume at {offset + done}");
             done += read;
         }

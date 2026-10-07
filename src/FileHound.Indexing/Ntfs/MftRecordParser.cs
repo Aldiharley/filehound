@@ -32,22 +32,31 @@ public static class MftRecordParser
 
     /// <summary>
     /// Verifies the FILE signature and undoes the update-sequence protection in place.
-    /// Returns false for a bad signature or a torn (partially written) record.
+    /// Returns false for a bad signature or a torn (partially written) record. With
+    /// <paramref name="acceptAlreadyApplied"/>, a record whose sector tails already hold the saved values (as
+    /// returned by FSCTL_GET_NTFS_FILE_RECORD, which reads NTFS's in-memory copy) is accepted unchanged.
     /// </summary>
-    public static bool ApplyFixups(Span<byte> record)
+    public static bool ApplyFixups(Span<byte> record, bool acceptAlreadyApplied = false)
     {
         if (record.Length < 48 || !record[..4].SequenceEqual("FILE"u8)) return false;
         int usaOffset = BinaryPrimitives.ReadUInt16LittleEndian(record[4..]);
         int usaCount = BinaryPrimitives.ReadUInt16LittleEndian(record[6..]);
         if (usaCount < 2 || usaOffset + 2 * usaCount > record.Length || (usaCount - 1) * SectorStride > record.Length) return false;
         ushort usn = BinaryPrimitives.ReadUInt16LittleEndian(record[usaOffset..]);
+        bool allProtected = true, allApplied = true;
         for (int i = 1; i < usaCount; i++)
         {
-            var tail = record.Slice(i * SectorStride - 2, 2);
-            if (BinaryPrimitives.ReadUInt16LittleEndian(tail) != usn) return false;
-            record.Slice(usaOffset + 2 * i, 2).CopyTo(tail);
+            ushort tail = BinaryPrimitives.ReadUInt16LittleEndian(record[(i * SectorStride - 2)..]);
+            allProtected &= tail == usn;
+            allApplied &= tail == BinaryPrimitives.ReadUInt16LittleEndian(record[(usaOffset + 2 * i)..]);
         }
-        return true;
+        if (allProtected)
+        {
+            for (int i = 1; i < usaCount; i++)
+                record.Slice(usaOffset + 2 * i, 2).CopyTo(record.Slice(i * SectorStride - 2, 2));
+            return true;
+        }
+        return acceptAlreadyApplied && allApplied;
     }
 
     /// <summary>Parses a record whose fixups were already applied. Returns false when the record is malformed.</summary>

@@ -44,6 +44,29 @@ public class MftRecordParserTests
     public void Bad_signature_is_rejected() => Assert.False(MftRecordParser.ApplyFixups(new byte[1024]));
 
     [Fact]
+    public void Records_with_fixups_already_applied_are_accepted_only_when_allowed()
+    {
+        // FSCTL_GET_NTFS_FILE_RECORD may hand back records NTFS already fixed up in memory.
+        var b = new MftRecordBuilder().InUse().StandardInfo(When).FileName(5, "a.txt").ResidentData(3).Build();
+        Assert.True(MftRecordParser.ApplyFixups(b));
+        var copy = (byte[])b.Clone();
+        Assert.False(MftRecordParser.ApplyFixups(b));                                // tails no longer carry the USN
+        Assert.True(MftRecordParser.ApplyFixups(b, acceptAlreadyApplied: true));
+        Assert.Equal(copy, b);                                                        // unchanged
+        Assert.True(MftRecordParser.TryParse(b, out var r));
+        Assert.Equal("a.txt", r.Name.ToString());
+    }
+
+    [Fact]
+    public void Already_applied_check_still_rejects_garbage()
+    {
+        var b = new MftRecordBuilder().InUse().StandardInfo(When).FileName(5, "a.txt").Build();
+        Assert.True(MftRecordParser.ApplyFixups(b));
+        b[510] ^= 0x5A; // tail matches neither the USN nor the saved value
+        Assert.False(MftRecordParser.ApplyFixups(b, acceptAlreadyApplied: true));
+    }
+
+    [Fact]
     public void Parses_name_parent_size_time_attributes()
     {
         var b = Fixed(new MftRecordBuilder().InUse().StandardInfo(When, attributes: 0x2 | 0x20).FileName(64, "Report.pdf").ResidentData(321).Build());

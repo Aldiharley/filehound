@@ -181,33 +181,35 @@ public sealed class RawMftReader
             if (chunk.Length % _recordSize != 0) throw new ArgumentException("Chunk is not record-aligned.", nameof(chunk));
             int n = chunk.Length / _recordSize;
             for (int i = 0; i < n; i++)
+                AddRecord(chunk.Slice(i * _recordSize, _recordSize), firstRecordNo + i);
+        }
+
+        /// <summary>Adds one FILE record. Records may arrive in any order.</summary>
+        public void AddRecord(Span<byte> rec, long recNo, bool fixupsMayBeApplied = false)
+        {
+            if (!MftRecordParser.ApplyFixups(rec, fixupsMayBeApplied) || !MftRecordParser.TryParse(rec, out var r) || !r.InUse) return;
+
+            if (r.BaseRecord != 0)
             {
-                var rec = chunk.Slice(i * _recordSize, _recordSize);
-                if (!MftRecordParser.ApplyFixups(rec) || !MftRecordParser.TryParse(rec, out var r) || !r.InUse) continue;
-                long recNo = firstRecordNo + i;
+                if (!r.HasName && !r.HasSize) return;
+                if (!_extensions.TryGetValue(r.BaseRecord, out var ext)) _extensions[r.BaseRecord] = ext = new Extension();
+                if (r.HasName && ext.Name is null) { ext.Name = r.Name.ToString(); ext.Parent = r.ParentRecord; }
+                if (r.HasSize && ext.Size is null) ext.Size = r.Size;
+                return;
+            }
+            if (recNo < FirstUserRecord) return; // root and NTFS metafiles
 
-                if (r.BaseRecord != 0)
-                {
-                    if (!r.HasName && !r.HasSize) continue;
-                    if (!_extensions.TryGetValue(r.BaseRecord, out var ext)) _extensions[r.BaseRecord] = ext = new Extension();
-                    if (r.HasName && ext.Name is null) { ext.Name = r.Name.ToString(); ext.Parent = r.ParentRecord; }
-                    if (r.HasSize && ext.Size is null) ext.Size = r.Size;
-                    continue;
-                }
-                if (recNo < FirstUserRecord) continue; // root and NTFS metafiles
-
-                var flags = EntryFlagsExtensions.FromAttributes(r.Attributes) & ~EntryFlags.Directory;
-                if (r.IsDirectory) flags |= EntryFlags.Directory;
-                bool complete = r.HasName && (r.IsDirectory || r.HasSize || !r.HasAttributeList);
-                if (complete)
-                {
-                    if (r.ParentRecord == RootRecord && MftScanner.IsSkippedRootName(r.Name)) continue;
-                    _builder.AddRecord(recNo, r.ParentRecord, r.Name, flags | EntryFlags.MetadataKnown, r.IsDirectory ? 0 : r.Size, r.ModifiedUtcTicks);
-                }
-                else
-                {
-                    _deferred[recNo] = new Deferred(r.HasName ? r.Name.ToString() : null, r.ParentRecord, flags, r.ModifiedUtcTicks, r.HasSize ? r.Size : null);
-                }
+            var flags = EntryFlagsExtensions.FromAttributes(r.Attributes) & ~EntryFlags.Directory;
+            if (r.IsDirectory) flags |= EntryFlags.Directory;
+            bool complete = r.HasName && (r.IsDirectory || r.HasSize || !r.HasAttributeList);
+            if (complete)
+            {
+                if (r.ParentRecord == RootRecord && MftScanner.IsSkippedRootName(r.Name)) return;
+                _builder.AddRecord(recNo, r.ParentRecord, r.Name, flags | EntryFlags.MetadataKnown, r.IsDirectory ? 0 : r.Size, r.ModifiedUtcTicks);
+            }
+            else
+            {
+                _deferred[recNo] = new Deferred(r.HasName ? r.Name.ToString() : null, r.ParentRecord, flags, r.ModifiedUtcTicks, r.HasSize ? r.Size : null);
             }
         }
 

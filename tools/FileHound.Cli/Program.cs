@@ -33,37 +33,60 @@ if (command == "turbo-validate")
     return await TurboValidation.RunAsync(letter, turboData, report);
 }
 
+if (command == "raw-probe")
+{
+    // filehound-cli raw-probe C --report <file>   (must run elevated)
+    string report = TakeOption(argList, "--report") ?? Path.Combine(Path.GetTempPath(), "filehound-raw-probe.txt");
+    return RawProbe.Run(char.ToUpperInvariant((rest.FirstOrDefault() ?? "C")[0]), report);
+}
+
 if (command == "turbo-bench")
 {
     // filehound-cli turbo-bench C F M --report <file>   (must run elevated)
-    // Per drive: raw $MFT scan first (cold if the MFT isn't cached), then enumeration + metadata fill,
-    // then a warm raw scan; compares entry counts, path sets and sizes between the two methods.
+    // Per drive: the automatic tiered scan first (cold if the MFT isn't cached), the file-record tier single-threaded
+    // (first drive only), enumeration (+ metadata fill timing on the first drive), then a warm automatic scan.
+    // Compares entry counts and path sets with enumeration, and sizes with the disk.
     var letters = rest.Count > 0 ? rest.Select(s => char.ToUpperInvariant(s[0])).ToList() : ['C'];
     string report = TakeOption(argList, "--report") ?? Path.Combine(Path.GetTempPath(), "filehound-turbo-bench.txt");
     var lines = new List<string> { $"elevated={Elevation.IsElevated}  {DateTime.Now:yyyy-MM-dd HH:mm:ss}" };
     void Line(string s) { lines.Add(s); File.WriteAllLines(report, lines); }
+    bool first = true;
     foreach (var letter in letters)
     {
         try
         {
             var drive = DriveDiscovery.GetDrives().Single(d => d.Letter == letter);
             Line($"== {letter}: ({drive.Format}, {drive.TotalSize / 1e12:F1} TB)");
-            (VolumeIndex V, FileHound.Indexing.Ntfs.MftScanner S, double Secs) Scan(bool raw)
+            (VolumeIndex V, FileHound.Indexing.Ntfs.MftScanner S, double Secs) Scan(bool raw, bool fileRecord, int threads = 0)
             {
-                var s = new FileHound.Indexing.Ntfs.MftScanner { PreferRaw = raw };
+                var s = new FileHound.Indexing.Ntfs.MftScanner { PreferRaw = raw, PreferFileRecord = fileRecord, FileRecordThreads = threads };
                 var sw = Stopwatch.StartNew();
                 var v = s.Scan(drive, [], null, CancellationToken.None);
                 return (v, s, sw.Elapsed.TotalSeconds);
             }
+            string Describe(string label, (VolumeIndex V, FileHound.Indexing.Ntfs.MftScanner S, double Secs) r) =>
+                $"{label,-20} {r.V.LiveCount,11:N0} entries in {r.Secs,6:F2}s  method={r.S.Method}  (fetch/io {r.S.IoTime.TotalSeconds:F2}s, parse {r.S.ParseTime.TotalSeconds:F2}s, build {r.S.BuildTime.TotalSeconds:F2}s)  incomplete={MetadataFiller.HasIncompleteMetadata(r.V)}"
+                + (r.S.FallbackReason is null ? "" : $"\n    fallback: {r.S.FallbackReason}");
 
-            var raw1 = Scan(raw: true);
-            Line($"raw #1 (cold-ish): {raw1.V.LiveCount:N0} entries in {raw1.Secs:F2}s  used raw={raw1.S.UsedRawReader} {raw1.S.FallbackReason}  (io {raw1.S.IoTime.TotalSeconds:F2}s, parse {raw1.S.ParseTime.TotalSeconds:F2}s, build {raw1.S.BuildTime.TotalSeconds:F2}s)  incomplete metadata={MetadataFiller.HasIncompleteMetadata(raw1.V)}");
-            var en = Scan(raw: false);
-            var swf = Stopwatch.StartNew();
-            await new MetadataFiller().FillAsync(en.V, null, CancellationToken.None);
-            Line($"enum:              {en.V.LiveCount:N0} entries in {en.Secs:F2}s + metadata fill {swf.Elapsed.TotalSeconds:F2}s");
-            var raw2 = Scan(raw: true);
-            Line($"raw #2 (warm):     {raw2.V.LiveCount:N0} entries in {raw2.Secs:F2}s  (io {raw2.S.IoTime.TotalSeconds:F2}s, parse {raw2.S.ParseTime.TotalSeconds:F2}s, build {raw2.S.BuildTime.TotalSeconds:F2}s)");
+            var auto1 = Scan(raw: true, fileRecord: true);
+            Line(Describe("auto #1 (cold-ish):", auto1));
+            if (first)
+            {
+                var single = Scan(raw: false, fileRecord: true, threads: 1);
+                Line(Describe("file-record 1 thread:", single));
+            }
+            var en = Scan(raw: false, fileRecord: false);
+            string fill = "";
+            if (first)
+            {
+                var swf = Stopwatch.StartNew();
+                await new MetadataFiller().FillAsync(en.V, null, CancellationToken.None);
+                fill = $" + metadata fill {swf.Elapsed.TotalSeconds:F2}s";
+            }
+            Line(Describe("enumeration:", en) + fill);
+            var raw2 = Scan(raw: true, fileRecord: true);
+            Line(Describe("auto #2 (warm):", raw2));
+            first = false;
 
             // Agreement: paths from the enumeration index must exist in the raw index, sizes must match the disk.
             var rnd = new Random(1);
@@ -77,7 +100,8 @@ if (command == "turbo-bench")
                 pathChecked++;
                 if (raw2.V.FindByPath(p) < 0) { pathMissing++; if (missingExamples.Count < 5) missingExamples.Add(p); }
             }
-            for (int i = 0; i < 40000 && sizeChecked < 2000; i++)
+            // Sizes are only meaningful when the scan delivered metadata itself (not for plain enumeration).
+            for (int i = 0; i < 40000 && sizeChecked < 2000 && raw2.S.Method != FileHound.Indexing.Ntfs.MftScanner.ScanMethod.Enumeration; i++)
             {
                 int e = rnd.Next(1, raw2.V.Count);
                 if (!raw2.V.IsLive(e) || raw2.V.IsDirectory(e)) continue;

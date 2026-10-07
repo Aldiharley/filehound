@@ -82,6 +82,43 @@ public class RawMftReaderTests
     }
 
     [Fact]
+    public void Records_added_individually_in_any_order_give_the_same_index()
+    {
+        var records = new List<(int No, byte[] Record)>
+        {
+            (5, new MftRecordBuilder().InUse(directory: true).StandardInfo(When).FileName(5, ".").Build()),
+            (64, new MftRecordBuilder().InUse(directory: true).StandardInfo(When).FileName(5, "Docs").Build()),
+            (65, new MftRecordBuilder().InUse().StandardInfo(When).FileName(64, "a.txt").ResidentData(11).Build()),
+            (66, new MftRecordBuilder().InUse().StandardInfo(When).AttributeList().ResidentData(42).Build()),
+            (70, new MftRecordBuilder().InUse().Extension(66).FileName(64, "b.txt").Build()),
+        };
+        var acc = new RawMftReader.Accumulator(@"Q:\", RecordSize, 64);
+        foreach (var (no, rec) in Enumerable.Reverse(records))   // descending, as FSCTL_GET_NTFS_FILE_RECORD walks
+        {
+            Assert.True(MftRecordParser.ApplyFixups(rec));        // simulate records already fixed up by NTFS
+            acc.AddRecord(rec, no, fixupsMayBeApplied: true);
+        }
+        var v = acc.Build();
+        Assert.Equal(11, v.Size(v.FindByPath(@"Q:\Docs\a.txt")));
+        Assert.Equal(42, v.Size(v.FindByPath(@"Q:\Docs\b.txt")));
+        Assert.Equal(3, v.LiveCount);
+    }
+
+    [Fact]
+    public void Downward_enumeration_visits_each_in_use_record_once_across_partitions()
+    {
+        // Docs example: records 1..9 and 15 in use, 10..14 free. "Fetch n" returns the highest in-use record <= n.
+        var inUse = new SortedSet<long> { 1, 2, 3, 4, 5, 6, 7, 8, 9, 15, 40, 41 };
+        long Fetch(long n) => inUse.GetViewBetween(0, n).Count == 0 ? -1 : inUse.GetViewBetween(0, n).Max;
+        var seen = new List<long>();
+        int calls = 0;
+        foreach (var (lo, hi) in FileRecordMftReader.Partition(total: 48, parts: 5))
+            FileRecordMftReader.EnumerateDownward(lo, hi, n => { calls++; return Fetch(n); }, seen.Add);
+        Assert.Equal(inUse.OrderBy(x => x), seen.Order());
+        Assert.True(calls <= inUse.Count + 5, $"{calls} calls"); // ~one call per in-use record (+1 per partition)
+    }
+
+    [Fact]
     public void Torn_records_are_skipped()
     {
         var torn = new MftRecordBuilder().InUse().StandardInfo(When).FileName(5, "torn.txt").Build();

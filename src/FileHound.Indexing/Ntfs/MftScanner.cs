@@ -36,17 +36,25 @@ public sealed class MftScanner
     public TimeSpan ParseTime { get; private set; }
     public TimeSpan BuildTime { get; private set; }
 
-    /// <summary>Try the raw $MFT reader first (names, sizes and dates in one pass). Default true.</summary>
+    public enum ScanMethod { None, RawVolume, FileRecord, Enumeration }
+
+    /// <summary>Try the raw $MFT volume reader first (names, sizes and dates in one pass). Default true.</summary>
     public bool PreferRaw { get; init; } = true;
-    /// <summary>True when the last scan used <see cref="RawMftReader"/>; false when it used FSCTL_ENUM_USN_DATA.</summary>
-    public bool UsedRawReader { get; private set; }
-    /// <summary>Why the raw reader was not used for the last scan (null when it was, or wasn't tried).</summary>
+    /// <summary>Then try per-record FSCTL_GET_NTFS_FILE_RECORD reads (works when raw volume reads are blocked). Default true.</summary>
+    public bool PreferFileRecord { get; init; } = true;
+    /// <summary>Worker threads for the FSCTL_GET_NTFS_FILE_RECORD tier (0 = default).</summary>
+    public int FileRecordThreads { get; init; }
+    /// <summary>Which tier produced the last scan.</summary>
+    public ScanMethod Method { get; private set; }
+    /// <summary>True when the last scan used <see cref="RawMftReader"/>.</summary>
+    public bool UsedRawReader => Method == ScanMethod.RawVolume;
+    /// <summary>Why faster tiers were skipped for the last scan (null when the first tier worked or none was tried).</summary>
     public string? FallbackReason { get; private set; }
 
     public unsafe VolumeIndex Scan(DriveDescriptor drive, IReadOnlyCollection<string> excluded, IProgress<ScanProgress>? progress, CancellationToken ct)
     {
         long ioTicks = 0, parseTicks = 0;
-        UsedRawReader = false;
+        Method = ScanMethod.None;
         FallbackReason = null;
         using var h = Kernel32.OpenVolume(drive.Letter);
         if (h.IsInvalid) throw new Win32Exception(Marshal.GetLastPInvokeError(), $"Cannot open volume {drive.Letter}:");
@@ -62,7 +70,7 @@ public sealed class MftScanner
             {
                 var raw = new RawMftReader();
                 var rv = raw.Read(h, drive, progress, ct);
-                UsedRawReader = true;
+                Method = ScanMethod.RawVolume;
                 IoTime = raw.IoTime;
                 ParseTime = raw.ParseTime;
                 BuildTime = raw.BuildTime;
@@ -70,9 +78,29 @@ public sealed class MftScanner
             }
             catch (Exception ex) when (ex is NotSupportedException or InvalidDataException or IOException or Win32Exception)
             {
-                FallbackReason = ex.Message; // fall through to FSCTL_ENUM_USN_DATA
+                FallbackReason = "raw volume read: " + ex.Message; // e.g. Win32 error 50 when security software blocks raw reads
             }
         }
+
+        if (PreferFileRecord)
+        {
+            try
+            {
+                var fr = FileRecordThreads > 0 ? new FileRecordMftReader { Threads = FileRecordThreads } : new FileRecordMftReader();
+                var sw = System.Diagnostics.Stopwatch.StartNew();
+                var fv = fr.Read(drive, progress, ct);
+                Method = ScanMethod.FileRecord;
+                ParseTime = fr.ParseTime;
+                BuildTime = fr.BuildTime;
+                IoTime = sw.Elapsed - fr.ParseTime - fr.BuildTime; // parsing overlaps fetching; this is the remainder
+                return Finish(fv, jd, drive, excluded, progress);
+            }
+            catch (Exception ex) when (ex is NotSupportedException or InvalidDataException or IOException or Win32Exception)
+            {
+                FallbackReason = (FallbackReason is null ? "" : FallbackReason + "; ") + "file-record reads: " + ex.Message;
+            }
+        }
+        Method = ScanMethod.Enumeration;
 
         long totalRecords = EstimateRecordCount(h);
         var builder = new VolumeIndexBuilder(drive.Root, IndexMode.Turbo, (int)Math.Clamp(totalRecords, 1 << 16, 1 << 26));

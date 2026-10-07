@@ -270,10 +270,10 @@ public sealed class IndexManager : IAsyncDisposable
             var excluded = _excluded;
             var scanner = new MftScanner();
             v = await Task.Run(() => scanner.Scan(drive, excluded, progress, ct), ct).ConfigureAwait(false);
-            if (scanner.FallbackReason is not null) Log?.Invoke($"Indexing {drive.Letter}: raw $MFT reader unavailable ({scanner.FallbackReason}); used FSCTL_ENUM_USN_DATA");
+            if (scanner.FallbackReason is not null) Log?.Invoke($"Indexing {drive.Letter}: faster MFT tiers skipped ({scanner.FallbackReason}); used {scanner.Method}");
             ct.ThrowIfCancellationRequested();
             Publish(slot, v);
-            Log?.Invoke($"Indexing {drive.Letter}: MFT scan ({(scanner.UsedRawReader ? "raw $MFT" : "enumeration")}) {v.LiveCount:N0} entries in {sw.Elapsed.TotalSeconds:F1}s");
+            Log?.Invoke($"Indexing {drive.Letter}: MFT scan ({scanner.Method}) {v.LiveCount:N0} entries in {sw.Elapsed.TotalSeconds:F1}s");
         }
 
         ct.ThrowIfCancellationRequested();

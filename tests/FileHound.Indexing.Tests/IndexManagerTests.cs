@@ -69,10 +69,14 @@ public sealed class IndexManagerTests : IDisposable
         var weak = WeakFirstVolume(m2);
         await m2.WaitForIdleAsync();
         Assert.False(IsCurrentVolume(weak, m2), "refresh should have swapped in a new index");
-        for (int i = 0; i < 3; i++)
+        // The drive task that just completed may still be unwinding on another thread, and its frames root the old
+        // index for a few more microseconds. A leak, by contrast, never clears: so collect repeatedly, briefly.
+        var deadline = System.Diagnostics.Stopwatch.StartNew();
+        while (weak.IsAlive && deadline.Elapsed < TimeSpan.FromSeconds(5))
         {
             GC.Collect(2, GCCollectionMode.Forced, blocking: true);
             GC.WaitForPendingFinalizers();
+            if (weak.IsAlive) await Task.Delay(20);
         }
         Assert.False(weak.IsAlive, "snapshot index is still referenced after the refresh swap");
     }

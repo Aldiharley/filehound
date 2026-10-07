@@ -273,7 +273,12 @@ public sealed class IndexManager : IAsyncDisposable
                 DisposeUpdater(slot);
             }
         }
-        await RunStandardAsync(slot, snapshot ?? standIn, ct).ConfigureAwait(false);
+        // From here on the superseded index is the slot's business. Clear our hoisted references so it can be
+        // collected as soon as the new index is published, rather than living on through the snapshot save.
+        var previous = snapshot ?? standIn;
+        snapshot = null;
+        standIn = null;
+        await RunStandardAsync(slot, previous, ct).ConfigureAwait(false);
     }
 
     private async Task RunTurboAsync(Slot slot, VolumeIndex? snapshot, CancellationToken ct)
@@ -290,6 +295,7 @@ public sealed class IndexManager : IAsyncDisposable
         }
         else
         {
+            snapshot = null; // stays searchable via the slot; don't root it from this frame through the scan and save
             Update(slot, s => s with { Mode = IndexMode.Turbo, Status = DriveStatus.Scanning, Progress = 0, Error = null });
             var sw = System.Diagnostics.Stopwatch.StartNew();
             var progress = new Progress(p => Update(slot, s => s with { Entries = p.Entries, Progress = p.Fraction }));
@@ -331,6 +337,7 @@ public sealed class IndexManager : IAsyncDisposable
         var drive = slot.Drive;
         var v = new VolumeIndex(drive.Root, IndexMode.Standard, 1 << 16) { VolumeSerial = drive.Serial };
         bool streaming = previous is null;
+        previous = null; // the slot keeps it searchable; this frame must not keep it alive once the slot lets go
         if (streaming) Publish(slot, v);
         // Shown as Scanning either way; when refreshing, the previous index keeps answering searches meanwhile.
         Update(slot, s => s with { Mode = IndexMode.Standard, Status = DriveStatus.Scanning, Progress = 0, Error = null });

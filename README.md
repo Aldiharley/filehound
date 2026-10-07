@@ -30,7 +30,7 @@ FileHound indexes every file and folder on all your local drives (C:, D:, E:, US
 
 1. Download `FileHound.exe` from the [latest release](https://github.com/Aldiharley/filehound/releases/latest). It is self-contained: no .NET install is needed.
 2. Put it anywhere you like (for example `%LOCALAPPDATA%\Programs\FileHound`) and run it. Windows SmartScreen may warn the first time because the file is not code-signed; choose **More info → Run anyway**.
-3. Press **Ctrl+Alt+Space** to search. Turn on **Start with Windows** in Settings so the hotkey is always ready.
+3. Press **Ctrl+Alt+Space** to search. If another app already uses that shortcut, FileHound picks the first free one instead (usually **Ctrl+Shift+Space**). **Settings → Global hotkey** shows which one is active and lets you change it. Turn on **Start with Windows** in Settings so the hotkey is always ready.
 
 FileHound greets you by your Windows display name. Change it, or clear it to go back to automatic, under **Settings → General → Your name**.
 
@@ -166,6 +166,12 @@ Design docs live in [`docs/superpowers/specs`](docs/superpowers/specs), the impl
 
 ### 1.1.0
 
+- **Much faster Turbo indexing.** Turbo now reads the NTFS master file table itself and gets names, sizes and dates in one pass, with no separate "measuring files" step. It tries three ways, fastest first, and falls back automatically:
+  - **Raw `$MFT` read.** Large sequential reads straight from the volume. On a 2.5M-entry HDD this takes 25.6 s cold and 9.5 s warm.
+  - **Per-record reads with `FSCTL_GET_NTFS_FILE_RECORD`.** Used when security software blocks raw volume reads. A 5M-entry C: drive is indexed in 7.8 s, against 9 s plus a 20 s fill before.
+  - **`FSCTL_ENUM_USN_DATA`.** The 1.0 method, kept as the last resort.
+
+  Results were checked against the 1.0 method: entry counts are identical on both drives tested, and sampled sizes match the disk.
 - **Greeting by name.** The sidebar uses your Windows display name (first name) and Settings → General gets a *Your name* override.
 - **Self-contained release build and `build.ps1`.** The script installs the .NET 10 SDK if it is missing, then builds, tests, publishes and installs. Any 10.0.x SDK now satisfies `global.json`.
 - **Safer Turbo mode.** Explorer is always launched by its full path, and Alt+Enter Properties is shown by the desktop's own Explorer instead of the elevated process, so nothing started from the sheet inherits admin rights.

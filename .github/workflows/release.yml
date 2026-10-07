@@ -81,7 +81,7 @@ jobs:
           $m = [regex]::Match($readme, "(?ms)^### $([regex]::Escape($v))[ \t]*\r?\n(.*?)(?=^### |^## |\z)")
           $changes = if ($m.Success) { $m.Groups[1].Value.Trim() } else { "_No changelog entry for $v in README.md._" }
           $lines = @(
-            "Fast, friendly file finding for every drive on Windows 11. ``FileHound.exe`` is self-contained: download, run, press **Ctrl+Alt+Space**. No .NET install needed. Windows SmartScreen may warn the first time because the file is not code-signed (More info → Run anyway).",
+            "Fast, friendly file finding for every drive on Windows 11. ``FileHound.exe`` is self-contained: download, run, press **Ctrl+Alt+Space** (if another app already uses it, FileHound picks a free shortcut such as **Ctrl+Shift+Space**; **Settings → Global hotkey** shows which). No .NET install needed. Windows SmartScreen may warn the first time because the file is not code-signed (More info → Run anyway).",
             "",
             "## What's new in $v",
             "",

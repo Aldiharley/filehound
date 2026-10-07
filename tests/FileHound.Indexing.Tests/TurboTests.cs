@@ -175,8 +175,11 @@ public sealed class TurboTests : IDisposable
         var scanner = new MftScanner();
         var v = scanner.Scan(c, [], null, CancellationToken.None);
         string about = $"method={scanner.Method}, fallback={scanner.FallbackReason ?? "none"}, live={v.LiveCount:N0}, root={v.Root}, " +
-                       $"Windows={v.FindByPath(@"C:\Windows")}, System32={v.FindByPath(@"C:\Windows\System32")}, explorer={v.FindByPath(@"C:\Windows\explorer.exe")}";
+                       $"Windows={v.FindByPath(@"C:\Windows")}, System32={v.FindByPath(@"C:\Windows\System32")}, hosts={v.FindByPath(@"C:\Windows\System32\drivers\etc\hosts")}";
         Assert.True(v.LiveCount > 10_000, about);
-        Assert.True(v.FindByPath(@"C:\Windows\explorer.exe") > 0, about);
+        Assert.True(v.FindByPath(@"C:\Windows\System32") > 0, about);
+        // Not C:\Windows\explorer.exe: it is hard-linked into WinSxS, and Turbo lists a hard-linked file under only one
+        // of its names (whichever $FILE_NAME comes first in the record), which differs between machines.
+        Assert.True(v.FindByPath(@"C:\Windows\System32\drivers\etc\hosts") > 0, about);
     }
 }

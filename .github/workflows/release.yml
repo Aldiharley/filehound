@@ -15,6 +15,10 @@ on:
         description: 'dotnet test --filter (Perf is a desktop wall-clock budget; Elevated tests touch the real C: drive as admin)'
         default: 'Category!=Perf&Category!=Elevated'
         required: false
+      draft_release:
+        description: 'Also exercise the release step by creating a DRAFT release named v<version>-ci-<run> (delete it afterwards)'
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -103,18 +107,26 @@ jobs:
             release-notes.md
 
       - name: Create or update the GitHub release
-        if: github.ref_type == 'tag'
+        if: github.ref_type == 'tag' || github.event.inputs.draft_release == 'true'
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          $tag = "${{ github.ref_name }}"
           $v = "${{ steps.ver.outputs.version }}"
           $files = @("release/FileHound.exe", "release/FileHound-v$v-win-x64.zip", "release/SHA256SUMS.txt")
+          if ("${{ github.ref_type }}" -ne 'tag') {
+            # Manual dry run: a draft creates no tag and is invisible to users; delete it once checked.
+            $tag = "v$v-ci-${{ github.run_number }}"
+            gh release create $tag @files --draft --target "${{ github.sha }}" --title "FileHound $v (CI dry run ${{ github.run_number }})" --notes-file release-notes.md
+            if ($LASTEXITCODE -ne 0) { throw "gh release create (draft) failed" }
+            exit 0
+          }
+          $tag = "${{ github.ref_name }}"
           gh release view $tag *> $null
           if ($LASTEXITCODE -eq 0) {
             "Release $tag exists; replacing its files and notes"
             gh release upload $tag @files --clobber
+            if ($LASTEXITCODE -ne 0) { throw "gh release upload failed" }
             gh release edit $tag --title "FileHound $v" --notes-file release-notes.md
           } else {
             gh release create $tag @files --verify-tag --title "FileHound $v" --notes-file release-notes.md

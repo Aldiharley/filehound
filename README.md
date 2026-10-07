@@ -133,7 +133,7 @@ Releases are built by GitHub Actions ([`.github/workflows/release.yml`](.github/
 git tag -a v1.2.0 -m "FileHound 1.2.0" && git push origin main --follow-tags
 ```
 
-The workflow builds, runs the tests, publishes the self-contained exe, and attaches `FileHound.exe`, the zip and `SHA256SUMS.txt` to a release whose notes come from that changelog section. It fails if the tag and `<Version>` disagree.
+The workflow builds, runs the tests, publishes the self-contained exe, and attaches `FileHound.exe`, the zip and `SHA256SUMS.txt` to a release whose notes come from that changelog section. It fails if the tag and `<Version>` disagree. Running it by hand (Actions → Release → Run workflow) builds the same files as a workflow artifact; tick *draft_release* to also rehearse the release step as a draft, which you then delete.
 
 ### Headless tools
 

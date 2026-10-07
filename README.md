@@ -125,6 +125,16 @@ To publish a self-contained single-file executable:
 dotnet publish src/FileHound.App -c Release -r win-x64 --self-contained -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -o publish
 ```
 
+### Releasing
+
+Releases are built by GitHub Actions ([`.github/workflows/release.yml`](.github/workflows/release.yml)). Set `<Version>` in `Directory.Build.props`, add a `### x.y.z` section under [Changelog](#changelog), commit, then push a matching tag:
+
+```bash
+git tag -a v1.2.0 -m "FileHound 1.2.0" && git push origin main --follow-tags
+```
+
+The workflow builds, runs the tests, publishes the self-contained exe, and attaches `FileHound.exe`, the zip and `SHA256SUMS.txt` to a release whose notes come from that changelog section. It fails if the tag and `<Version>` disagree.
+
 ### Headless tools
 
 ```bash

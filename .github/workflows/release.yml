@@ -1,0 +1,116 @@
+name: Release
+
+# Builds, tests and publishes FileHound, then attaches the files to a GitHub release.
+# Triggered by pushing a version tag (v1.2.0). To cut a release:
+#   1. set <Version> in Directory.Build.props and add a "### x.y.z" section under Changelog in README.md
+#   2. commit, then:  git tag -a vX.Y.Z -m "FileHound X.Y.Z" && git push origin main --follow-tags
+# A manual run (workflow_dispatch) builds the same files and keeps them as a workflow artifact without releasing.
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  DOTNET_NOLOGO: true
+  DOTNET_CLI_TELEMETRY_OPTOUT: true
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x   # any 10.0 SDK satisfies global.json (rollForward: latestFeature)
+
+      - name: Read version and check it against the tag
+        id: ver
+        shell: pwsh
+        run: |
+          $version = ([xml](Get-Content Directory.Build.props -Raw)).Project.PropertyGroup.Version
+          $ref = "${{ github.ref_name }}"
+          if ("${{ github.ref_type }}" -eq 'tag') {
+            if ($ref -notmatch '^v(\d+\.\d+\.\d+)$') { throw "Tag '$ref' must look like v1.2.3" }
+            if ($Matches[1] -ne $version) { throw "Tag $ref does not match <Version>$version</Version> in Directory.Build.props" }
+          }
+          "version=$version" >> $env:GITHUB_OUTPUT
+          "Building FileHound $version"
+
+      - name: Build
+        run: dotnet build FileHound.sln -c Release
+
+      - name: Test
+        # The Perf category is a wall-clock budget tuned for a desktop; shared runners are too slow and noisy for it.
+        run: dotnet test FileHound.sln -c Release --no-build --filter "Category!=Perf"
+
+      - name: Publish self-contained single file
+        run: dotnet publish src/FileHound.App -c Release -r win-x64 --self-contained -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -o publish
+
+      - name: Package
+        shell: pwsh
+        run: |
+          $v = "${{ steps.ver.outputs.version }}"
+          New-Item -ItemType Directory release | Out-Null
+          Copy-Item publish/FileHound.exe release/
+          Compress-Archive -Path publish/FileHound.exe -DestinationPath "release/FileHound-v$v-win-x64.zip" -CompressionLevel Optimal
+          Get-ChildItem release -File | ForEach-Object { "{0}  {1}" -f (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower(), $_.Name } |
+            Set-Content release/SHA256SUMS.txt -Encoding ascii
+          (Get-Item release/FileHound.exe).VersionInfo | Select-Object FileVersion, ProductVersion | Format-List
+          Get-Content release/SHA256SUMS.txt
+
+      - name: Write release notes from the README changelog
+        shell: pwsh
+        run: |
+          $v = "${{ steps.ver.outputs.version }}"
+          $readme = [IO.File]::ReadAllText((Join-Path $PWD "README.md"))
+          $m = [regex]::Match($readme, "(?ms)^### $([regex]::Escape($v))[ \t]*\r?\n(.*?)(?=^### |^## |\z)")
+          $changes = if ($m.Success) { $m.Groups[1].Value.Trim() } else { "_No changelog entry for $v in README.md._" }
+          $lines = @(
+            "Fast, friendly file finding for every drive on Windows 11. ``FileHound.exe`` is self-contained: download, run, press **Ctrl+Alt+Space**. No .NET install needed. Windows SmartScreen may warn the first time because the file is not code-signed (More info → Run anyway).",
+            "",
+            "## What's new in $v",
+            "",
+            $changes,
+            "",
+            "## Files",
+            "",
+            "| File | Use |",
+            "|---|---|",
+            "| ``FileHound.exe`` | The app. Put it anywhere and run it. |",
+            "| ``FileHound-v$v-win-x64.zip`` | The same exe, zipped. |",
+            "| ``SHA256SUMS.txt`` | Checksums: ``Get-FileHash .\FileHound.exe -Algorithm SHA256`` |"
+          )
+          [IO.File]::WriteAllText((Join-Path $PWD "release-notes.md"), ($lines -join "`n"), (New-Object Text.UTF8Encoding $false))
+          Get-Content release-notes.md
+
+      - name: Keep the files as a workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: FileHound-${{ steps.ver.outputs.version }}
+          path: |
+            release/
+            release-notes.md
+
+      - name: Create or update the GitHub release
+        if: github.ref_type == 'tag'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = "${{ github.ref_name }}"
+          $v = "${{ steps.ver.outputs.version }}"
+          $files = @("release/FileHound.exe", "release/FileHound-v$v-win-x64.zip", "release/SHA256SUMS.txt")
+          gh release view $tag *> $null
+          if ($LASTEXITCODE -eq 0) {
+            "Release $tag exists; replacing its files and notes"
+            gh release upload $tag @files --clobber
+            gh release edit $tag --title "FileHound $v" --notes-file release-notes.md
+          } else {
+            gh release create $tag @files --verify-tag --title "FileHound $v" --notes-file release-notes.md
+          }
+          if ($LASTEXITCODE -ne 0) { throw "gh release failed" }

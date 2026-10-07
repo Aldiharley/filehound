@@ -33,6 +33,11 @@ public sealed class WatcherUpdater : IDisposable
     public event EventHandler? Applied;
     /// <summary>Raised when the OS dropped events; the index may be stale until rescanned.</summary>
     public event EventHandler? Overflowed;
+    /// <summary>
+    /// Raised (on a background thread) when applying a change failed in an unexpected way. <see cref="Overflowed"/>
+    /// follows, because the index no longer matches the disk for that item; the loop itself keeps running.
+    /// </summary>
+    public event EventHandler<Exception>? Faulted;
 
     private volatile bool _paused;
 
@@ -99,12 +104,15 @@ public sealed class WatcherUpdater : IDisposable
                 while (_queue.TryDequeue(out var c))
                 {
                     try { changed |= Apply(c, walks); }
-                    catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException) { }
+                    catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException) { } // the item vanished or is odd: expected
+                    catch (Exception ex) when (ex is not OperationCanceledException) { Fault(ex); }
                     // Walk new directories before applying later events so their children are not added twice.
                     foreach (var (path, entry) in walks)
                     {
                         try { await _walker.WalkAsync(_index, path, entry, null, _cts.Token).ConfigureAwait(false); }
                         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+                        catch (OperationCanceledException) when (_cts.IsCancellationRequested) { throw; }
+                        catch (Exception ex) { Fault(ex); }
                     }
                     walks.Clear();
                 }
@@ -112,6 +120,17 @@ public sealed class WatcherUpdater : IDisposable
             }
         }
         catch (OperationCanceledException) { }
+        catch (Exception ex) when (!_cts.IsCancellationRequested)
+        {
+            // Last resort (something outside a single change failed): the loop is dead, so make sure the owner rescans.
+            Fault(ex);
+        }
+    }
+
+    private void Fault(Exception ex)
+    {
+        Faulted?.Invoke(this, ex);
+        SignalLost();
     }
 
     private bool Apply(Change c, List<(string, int)> walks)

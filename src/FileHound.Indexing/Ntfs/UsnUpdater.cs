@@ -29,6 +29,8 @@ public sealed class UsnUpdater : IDisposable
 
     public event EventHandler? Applied;
     public event EventHandler? JournalInvalid;
+    /// <summary>Raised (on a background thread) when the poll loop hit an unexpected error and stopped; the owner must rescan.</summary>
+    public event EventHandler<Exception>? Faulted;
 
     public void Start() => _loop = Task.Run(LoopAsync);
 
@@ -46,6 +48,12 @@ public sealed class UsnUpdater : IDisposable
             while (await timer.WaitForNextTickAsync(_cts.Token).ConfigureAwait(false));
         }
         catch (OperationCanceledException) { }
+        catch (Exception ex) when (!_cts.IsCancellationRequested)
+        {
+            // NextUsn only advances after a buffer applied cleanly, so retrying would hit the same record again.
+            // Dying silently would leave the drive "Ready" while its index quietly went stale: tell the owner instead.
+            Faulted?.Invoke(this, ex);
+        }
     }
 
     /// <summary>Reads all pending journal records. Returns the number applied, or -1 if the journal is invalid.</summary>

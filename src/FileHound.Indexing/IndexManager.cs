@@ -170,6 +170,32 @@ public sealed class IndexManager : IAsyncDisposable
         _ = Task.Run(() => RescanAsync(letter));
     }
 
+    /// <summary>
+    /// A live updater's loop died. Rescan to rebuild the index with a fresh updater, but never more than once per
+    /// ten minutes per drive, so a persistent fault degrades to a stale-but-searchable index with a visible note
+    /// instead of an endless rescan loop.
+    /// </summary>
+    private void OnUpdaterFaulted(Slot slot, string what, Exception ex)
+    {
+        Log?.Invoke($"Indexing {slot.Drive.Letter}: {what} failed: {ex}");
+        if (!TryClaimRescanWindow(slot))
+        {
+            Log?.Invoke($"Indexing {slot.Drive.Letter}: rescan deferred; live updates are off until then");
+            Update(slot, s => s with { Error = $"Live updates stopped ({ex.GetType().Name}); will rescan later" });
+            return;
+        }
+        RequestRescan(slot.Drive.Letter, $"{what} failed");
+    }
+
+    /// <summary>True at most once per ten minutes per drive: the updater-triggered rescan budget.</summary>
+    private static bool TryClaimRescanWindow(Slot slot)
+    {
+        var now = DateTime.UtcNow;
+        if (now - slot.LastOverflowRescan < TimeSpan.FromMinutes(10)) return false;
+        slot.LastOverflowRescan = now;
+        return true;
+    }
+
     public async Task SaveSnapshotsAsync()
     {
         List<Slot> slots;
@@ -280,6 +306,7 @@ public sealed class IndexManager : IAsyncDisposable
         var usn = new UsnUpdater(v, drive.Letter, TimeSpan.FromMilliseconds(500));
         usn.Applied += (_, _) => RaiseIndexChanged();
         usn.JournalInvalid += (_, _) => RequestRescan(drive.Letter, "USN journal invalid");
+        usn.Faulted += (_, ex) => OnUpdaterFaulted(slot, "USN updater", ex);
         slot.Updater = usn;
         usn.Start();
 
@@ -318,12 +345,11 @@ public sealed class IndexManager : IAsyncDisposable
         {
             watcher = new WatcherUpdater(v, drive.Root, walker, TimeSpan.FromMilliseconds(500));
             watcher.Applied += (_, _) => RaiseIndexChanged();
+            watcher.Faulted += (_, ex) => Log?.Invoke($"Indexing {drive.Letter}: live update failed: {ex}"); // Overflowed follows and drives the rescan
             watcher.Overflowed += (_, _) =>
             {
                 // Rate-limit: on a disk that churns faster than we can walk, rescanning in a loop would never settle.
-                var now = DateTime.UtcNow;
-                if (now - slot.LastOverflowRescan < TimeSpan.FromMinutes(10)) { Log?.Invoke($"Indexing {drive.Letter}: watcher lost events again; next rescan deferred"); return; }
-                slot.LastOverflowRescan = now;
+                if (!TryClaimRescanWindow(slot)) { Log?.Invoke($"Indexing {drive.Letter}: watcher lost events again; next rescan deferred"); return; }
                 RequestRescan(drive.Letter, "watcher lost events");
             };
             try { watcher.Start(paused: true); }

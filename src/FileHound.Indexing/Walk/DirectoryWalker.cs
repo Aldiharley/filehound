@@ -28,6 +28,9 @@ public sealed class DirectoryWalker
 
     public TimeSpan ProgressInterval { get; init; } = TimeSpan.FromMilliseconds(250);
 
+    /// <summary>Test hook: runs after a directory has been listed, before its children are added to the index.</summary>
+    internal Action<string>? AfterEnumerate { get; init; }
+
     private readonly record struct RawEntry(string Name, FileAttributes Attributes, long Length, long ModifiedTicks);
 
     private sealed class WalkState
@@ -108,10 +111,13 @@ public sealed class DirectoryWalker
                         options);
                     foreach (var item in enumerable) children.Add(item);
                 }
-                catch (Exception ex) when (ex is UnauthorizedAccessException or IOException or System.Security.SecurityException)
+                catch (Exception ex) when (ex is not OperationCanceledException)
                 {
+                    // Access denied and I/O errors are routine. Anything else (say, an ArgumentException from an exotic
+                    // name) gets the same treatment: skip this directory rather than lose the whole walk.
                     Interlocked.Increment(ref state.Skipped);
                 }
+                AfterEnumerate?.Invoke(dirPath);
 
                 if (children.Count > 0)
                 {
@@ -152,6 +158,13 @@ public sealed class DirectoryWalker
         catch (OperationCanceledException)
         {
             channel.Writer.TryComplete();
+            throw;
+        }
+        catch (Exception ex)
+        {
+            // This worker's directory never decrements Pending, so the channel would never complete and every other
+            // worker (and WalkAsync) would wait forever. Fail the channel so the walk ends with this error instead.
+            channel.Writer.TryComplete(ex);
             throw;
         }
     }

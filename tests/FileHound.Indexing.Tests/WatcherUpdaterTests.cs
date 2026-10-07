@@ -46,6 +46,33 @@ public sealed class WatcherUpdaterTests : IDisposable
     }
 
     [Fact]
+    public async Task Loop_survives_an_unexpected_failure_and_asks_for_a_rescan()
+    {
+        _t.File(@"docs\a.txt");
+        var index = new VolumeIndex(_t.Root, IndexMode.Standard);
+        await new DirectoryWalker([], 2).WalkAsync(index, _t.Root, 0, null, CancellationToken.None);
+
+        // Moved-in directories are walked by the updater; this walker blows up on one of them.
+        var faulty = new DirectoryWalker([], 2)
+        {
+            AfterEnumerate = p => { if (p.EndsWith(@"\bad", StringComparison.OrdinalIgnoreCase)) throw new InvalidOperationException("boom"); },
+        };
+        using var updater = new WatcherUpdater(index, _t.Root, faulty, TimeSpan.FromMilliseconds(100));
+        int faults = 0, overflows = 0;
+        updater.Faulted += (_, _) => Interlocked.Increment(ref faults);
+        updater.Overflowed += (_, _) => Interlocked.Increment(ref overflows);
+        updater.Start();
+
+        _outside.File(@"bad\inner.txt");
+        Directory.Move(_outside.Path("bad"), _t.Path("bad"));
+        TempTree.WaitUntil(() => Volatile.Read(ref faults) > 0, because: "fault reported");
+        TempTree.WaitUntil(() => Volatile.Read(ref overflows) > 0, because: "rescan requested");
+
+        var later = _t.File(@"docs\later.txt"); // the loop must still be alive afterwards
+        TempTree.WaitUntil(() => index.FindByPath(later) > 0, because: "change applied after the fault");
+    }
+
+    [Fact]
     public async Task Paused_watcher_queues_changes_until_resumed()
     {
         _t.File(@"docs\a.txt");

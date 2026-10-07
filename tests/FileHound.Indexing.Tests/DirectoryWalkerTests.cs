@@ -44,6 +44,24 @@ public sealed class DirectoryWalkerTests : IDisposable
     }
 
     [Fact]
+    public async Task Unexpected_worker_failure_fails_the_walk_instead_of_hanging()
+    {
+        _t.File(@"a\x.txt");
+        _t.File(@"b\y.txt");
+        _t.File(@"c\z.txt");
+        var index = new VolumeIndex(_t.Root, IndexMode.Standard);
+        var walker = new DirectoryWalker([], workers: 4)
+        {
+            AfterEnumerate = p => { if (p.EndsWith(@"\b", StringComparison.OrdinalIgnoreCase)) throw new InvalidOperationException("boom"); },
+        };
+
+        var walk = walker.WalkAsync(index, _t.Root, VolumeIndex.RootEntry, null, CancellationToken.None);
+        var finished = await Task.WhenAny(walk, Task.Delay(TimeSpan.FromSeconds(10)));
+        Assert.Same(walk, finished); // used to hang: Pending never reached zero, so no worker ever finished
+        await Assert.ThrowsAsync<InvalidOperationException>(() => walk);
+    }
+
+    [Fact]
     public async Task Walks_subtree_into_existing_entry()
     {
         var index = new VolumeIndex(_t.Root, IndexMode.Standard);

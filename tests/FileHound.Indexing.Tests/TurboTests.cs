@@ -167,13 +167,16 @@ public sealed class TurboTests : IDisposable
         Assert.True(index.ModifiedTicks(index.FindByRecord(11)) > 0);
     }
 
-    [Fact]
+    [Fact, Trait("Category", "Elevated")]
     public void MftScanner_scans_system_drive_when_elevated()
     {
         if (!Elevation.IsElevated) return; // requires admin; covered manually via the CLI
         var c = DriveDiscovery.GetDrives().Single(d => d.Letter == 'C');
-        var v = new MftScanner().Scan(c, [], null, CancellationToken.None);
-        Assert.True(v.LiveCount > 10_000);
-        Assert.True(v.FindByPath(@"C:\Windows\explorer.exe") > 0);
+        var scanner = new MftScanner();
+        var v = scanner.Scan(c, [], null, CancellationToken.None);
+        string about = $"method={scanner.Method}, fallback={scanner.FallbackReason ?? "none"}, live={v.LiveCount:N0}, root={v.Root}, " +
+                       $"Windows={v.FindByPath(@"C:\Windows")}, System32={v.FindByPath(@"C:\Windows\System32")}, explorer={v.FindByPath(@"C:\Windows\explorer.exe")}";
+        Assert.True(v.LiveCount > 10_000, about);
+        Assert.True(v.FindByPath(@"C:\Windows\explorer.exe") > 0, about);
     }
 }

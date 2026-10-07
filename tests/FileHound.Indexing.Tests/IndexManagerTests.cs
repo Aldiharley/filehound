@@ -64,11 +64,24 @@ public sealed class IndexManagerTests : IDisposable
             await m.SaveSnapshotsAsync();
         }
 
-        await using var m2 = new IndexManager(Options());
-        await m2.StartAsync();
-        var weak = WeakFirstVolume(m2);
-        await m2.WaitForIdleAsync();
-        Assert.False(IsCurrentVolume(weak, m2), "refresh should have swapped in a new index");
+        var log = new System.Collections.Concurrent.ConcurrentQueue<string>();
+        IndexManager.Log = log.Enqueue;
+        try
+        {
+            await using var m2 = new IndexManager(Options());
+            await m2.StartAsync();
+            var weak = WeakFirstVolume(m2);
+            await m2.WaitForIdleAsync();
+            var d = m2.Drives[0];
+            Assert.False(IsCurrentVolume(weak, m2),
+                $"refresh should have swapped in a new index (status={d.Status}, error={d.Error}, entries={d.Entries}); log:\n{string.Join('\n', log)}");
+            await AssertCollectedAsync(weak);
+        }
+        finally { IndexManager.Log = null; }
+    }
+
+    private static async Task AssertCollectedAsync(WeakReference weak)
+    {
         // The drive task that just completed may still be unwinding on another thread, and its frames root the old
         // index for a few more microseconds. A leak, by contrast, never clears: so collect repeatedly, briefly.
         var deadline = System.Diagnostics.Stopwatch.StartNew();

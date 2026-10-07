@@ -10,6 +10,11 @@ on:
   push:
     tags: ['v*']
   workflow_dispatch:
+    inputs:
+      test_filter:
+        description: 'dotnet test --filter (Perf is a desktop wall-clock budget; Elevated tests touch the real C: drive as admin)'
+        default: 'Category!=Perf&Category!=Elevated'
+        required: false
 
 permissions:
   contents: write
@@ -45,8 +50,9 @@ jobs:
         run: dotnet build FileHound.sln -c Release
 
       - name: Test
-        # The Perf category is a wall-clock budget tuned for a desktop; shared runners are too slow and noisy for it.
-        run: dotnet test FileHound.sln -c Release --no-build --filter "Category!=Perf"
+        # Perf is a wall-clock budget tuned for a desktop, and Elevated tests scan the runner's real C: drive as
+        # administrator (hosted runners run elevated); neither says anything about this build, so both stay out by default.
+        run: dotnet test FileHound.sln -c Release --no-build --filter "${{ github.event.inputs.test_filter || 'Category!=Perf&Category!=Elevated' }}"
 
       - name: Publish self-contained single file
         run: dotnet publish src/FileHound.App -c Release -r win-x64 --self-contained -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -o publish

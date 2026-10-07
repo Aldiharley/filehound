@@ -35,6 +35,29 @@ internal static unsafe partial class Kernel32
     public static partial bool GetVolumeInformation(string rootPathName, char* volumeNameBuffer, int volumeNameSize,
         out uint volumeSerialNumber, out uint maximumComponentLength, out uint fileSystemFlags, char* fileSystemNameBuffer, int fileSystemNameSize);
 
+    [LibraryImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static partial bool ReadFile(SafeFileHandle file, byte* buffer, int bytesToRead, out int bytesRead, nint overlapped);
+
+    [LibraryImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static partial bool SetFilePointerEx(SafeFileHandle file, long distance, out long newPosition, uint moveMethod);
+
+    /// <summary>Reads exactly <paramref name="length"/> bytes at an absolute volume offset (throws on failure).</summary>
+    public static void ReadExactly(SafeFileHandle volume, long offset, byte* buffer, int length)
+    {
+        if (!SetFilePointerEx(volume, offset, out _, 0 /* FILE_BEGIN */))
+            throw new IOException($"Seek to {offset} failed", Marshal.GetHRForLastWin32Error());
+        int done = 0;
+        while (done < length)
+        {
+            if (!ReadFile(volume, buffer + done, length - done, out int read, 0))
+                throw new IOException($"Volume read at {offset + done} failed", Marshal.GetHRForLastWin32Error());
+            if (read == 0) throw new IOException($"Unexpected end of volume at {offset + done}");
+            done += read;
+        }
+    }
+
     public const uint FILE_READ_ATTRIBUTES = 0x80;
     public const uint FILE_SHARE_DELETE = 0x4;
 

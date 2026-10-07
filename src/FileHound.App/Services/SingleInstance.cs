@@ -21,12 +21,18 @@ public sealed class SingleInstance : IDisposable
 
     public bool IsFirst => _owned;
 
+    /// <summary>
+    /// How long an elevated relaunch waits for the previous instance to exit. It must outlast that instance's shutdown
+    /// (up to 20 s of snapshot saving, then settings and log flushes), or the two would read and write the same files.
+    /// </summary>
+    public static readonly TimeSpan PreviousInstanceExitTimeout = TimeSpan.FromSeconds(30);
+
     /// <param name="waitForPid">When relaunching elevated, the previous instance's pid; we wait for it to exit first.</param>
     public static SingleInstance Acquire(int? waitForPid)
     {
         if (waitForPid is { } pid)
         {
-            try { Process.GetProcessById(pid).WaitForExit(10_000); }
+            try { Process.GetProcessById(pid).WaitForExit(PreviousInstanceExitTimeout); }
             catch (ArgumentException) { }
         }
         Mutex mutex;
@@ -56,18 +62,18 @@ public sealed class SingleInstance : IDisposable
         _registration = ThreadPool.RegisterWaitForSingleObject(_activate, (_, _) => onActivate(), null, Timeout.Infinite, executeOnlyOnce: false);
     }
 
-    /// <summary>Lets an elevated relaunch take over before this process has fully exited.</summary>
-    public void Release()
-    {
-        if (!_owned || _mutex is null) return;
-        _owned = false;
-        try { _mutex.ReleaseMutex(); } catch (ApplicationException) { }
-    }
-
+    /// <summary>
+    /// Releases the instance lock. Only called at the very end of shutdown, after snapshots and settings are written,
+    /// so an elevated relaunch can never run alongside this process.
+    /// </summary>
     public void Dispose()
     {
         _registration?.Unregister(null);
-        Release();
+        if (_owned && _mutex is not null)
+        {
+            _owned = false;
+            try { _mutex.ReleaseMutex(); } catch (ApplicationException) { }
+        }
         _mutex?.Dispose();
         _activate?.Dispose();
     }

@@ -79,8 +79,9 @@ public partial class App : Application
         var drives = new DrivesViewModel(_manager, elevated, () => RequestTurbo());
         bool hotkeyOk = false;
         var settingsVm = new SettingsViewModel(_settings, Save, g => _hotkey.Register(g), DataDirectory, hotkeyRegistered: true);
-        main = new MainViewModel(_manager, elevated) { Dashboard = dashboard, Search = searchVm, Drives = drives, Settings = settingsVm };
+        main = new MainViewModel(_manager, elevated, UserNames.Resolve(_settings.DisplayName)) { Dashboard = dashboard, Search = searchVm, Drives = drives, Settings = settingsVm };
         main.TurboRequested += (_, _) => RequestTurbo();
+        settingsVm.DisplayNameChanged = name => main.UserName = UserNames.Resolve(name);
         _main = main;
 
         _window = new MainWindow(main, _settings);
@@ -211,7 +212,8 @@ public partial class App : Application
             _main?.ShowToast("Turbo needs administrator approval — nothing changed");
             return;
         }
-        _single?.Release();
+        // The instance lock is held until ExitApp has saved snapshots and settings (released by _single.Dispose()),
+        // so the elevated copy, which waits for this pid, never overlaps with those writes.
         ExitApp();
     }
 

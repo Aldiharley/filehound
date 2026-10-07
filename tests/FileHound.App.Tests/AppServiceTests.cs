@@ -119,3 +119,47 @@ public class HotkeyGestureTests
             Assert.True(HotkeyGesture.TryParse(h, out _), h);
     }
 }
+
+public class UserNamesTests
+{
+    [Theory]
+    [InlineData("Dennis Davison", "aldih", "Dennis")]
+    [InlineData("Davison, Dennis", "aldih", "Dennis")]
+    [InlineData(@"CORP\Dennis Davison", "aldih", "Dennis")]
+    [InlineData(null, "aldih", "Aldih")]
+    [InlineData("", "dennis.davison", "Dennis")]
+    [InlineData("   ", @"CORP\jdoe", "Jdoe")]
+    [InlineData(null, "", "there")]
+    public void Falls_back_from_windows_display_name_to_account_name(string? display, string account, string expected)
+        => Assert.Equal(expected, UserNames.Pick(null, display, account));
+
+    [Fact]
+    public void A_name_typed_in_settings_wins_as_typed()
+    {
+        Assert.Equal("Boss", UserNames.Pick("  Boss ", "Dennis Davison", "aldih"));
+        Assert.Equal("Dennis", UserNames.Pick("   ", "Dennis Davison", "aldih")); // blanks mean "automatic"
+    }
+
+    [Fact]
+    public void Resolve_always_gives_something_to_say() => Assert.False(string.IsNullOrWhiteSpace(UserNames.Resolve(null)));
+}
+
+public class ShellServiceTests
+{
+    [Fact]
+    public void Explorer_is_launched_by_its_full_path_in_the_Windows_directory()
+    {
+        // A bare "explorer.exe" would be resolved from the app or current directory first, which matters when elevated.
+        var windows = Environment.GetFolderPath(Environment.SpecialFolder.Windows);
+        Assert.True(System.IO.Path.IsPathRooted(ShellService.ExplorerPath));
+        Assert.StartsWith(windows, ShellService.ExplorerPath, StringComparison.OrdinalIgnoreCase);
+        Assert.True(File.Exists(ShellService.ExplorerPath));
+    }
+
+    [Fact]
+    public void Elevated_relaunch_waits_longer_than_the_previous_instance_can_take_to_shut_down()
+    {
+        // ExitApp allows 20 s for snapshot saving plus settings and log flushes; the wait must cover all of it.
+        Assert.True(SingleInstance.PreviousInstanceExitTimeout >= TimeSpan.FromSeconds(25));
+    }
+}

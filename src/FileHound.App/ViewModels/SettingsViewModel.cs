@@ -27,6 +27,7 @@ public sealed partial class SettingsViewModel : ObservableObject
         _closeToTray = settings.CloseToTray;
         _fuzzy = settings.Fuzzy;
         _includeHidden = settings.IncludeHidden;
+        _displayName = settings.DisplayName ?? "";
         _hotkeyText = settings.Hotkey.Replace("+", " + ");
         _hotkeyStatus = hotkeyRegistered ? "✓ Registered" : "⚠ In use by another app — pick another combination";
         foreach (var p in settings.ExcludedPaths) Excluded.Add(p);
@@ -40,6 +41,7 @@ public sealed partial class SettingsViewModel : ObservableObject
     [ObservableProperty] private bool _closeToTray;
     [ObservableProperty] private bool _fuzzy;
     [ObservableProperty] private bool _includeHidden;
+    [ObservableProperty] private string _displayName;
     [ObservableProperty] private string _hotkeyText;
     [ObservableProperty] private string _hotkeyStatus;
     [ObservableProperty] private bool _isCapturing;
@@ -62,6 +64,19 @@ public sealed partial class SettingsViewModel : ObservableObject
 
     /// <summary>Keeps the Search page's Fuzzy chip in sync.</summary>
     public Action<bool>? FuzzyChanged { get; set; }
+
+    /// <summary>Hint under the name box: what the greeting falls back to when the box is empty.</summary>
+    public string DisplayNameHint { get; } = $"Used in the greeting. Leave empty to use your Windows name ({UserNames.Automatic()}).";
+
+    partial void OnDisplayNameChanged(string value)
+    {
+        _settings.DisplayName = string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+        _save();
+        DisplayNameChanged?.Invoke(_settings.DisplayName);
+    }
+
+    /// <summary>Lets the window refresh its greeting as the user types.</summary>
+    public Action<string?>? DisplayNameChanged { get; set; }
 
     /// <summary>Pushes the excluded-folder list to the indexer (applied on the next scan).</summary>
     public Action<IReadOnlyList<string>>? ExclusionsChanged { get; set; }
@@ -155,6 +170,6 @@ public sealed partial class SettingsViewModel : ObservableObject
     private static void OpenFolder(string path)
     {
         Directory.CreateDirectory(path);
-        Process.Start(new ProcessStartInfo("explorer.exe", $"\"{path}\"") { UseShellExecute = false });
+        Process.Start(new ProcessStartInfo(ShellService.ExplorerPath, $"\"{path}\"") { UseShellExecute = false });
     }
 }

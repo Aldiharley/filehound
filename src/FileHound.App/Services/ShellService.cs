@@ -11,13 +11,20 @@ public sealed class ShellService
 {
     public bool IsElevated { get; } = Elevation.IsElevated;
 
+    /// <summary>
+    /// Full path of Explorer. Always launch it by this path: a bare "explorer.exe" is resolved through the CreateProcess
+    /// search order (application directory, current directory, then System32), so a planted copy next to FileHound.exe
+    /// would run — as administrator when Turbo is on.
+    /// </summary>
+    public static readonly string ExplorerPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Windows), "explorer.exe");
+
     /// <summary>Opens a file or folder. When elevated, hands off to the (unelevated) desktop shell so the item doesn't inherit admin rights.</summary>
     public void Open(string path)
     {
         try
         {
             if (IsElevated)
-                Process.Start(new ProcessStartInfo("explorer.exe", Quote(path)) { UseShellExecute = false });
+                Process.Start(new ProcessStartInfo(ExplorerPath, Quote(path)) { UseShellExecute = false });
             else
                 Process.Start(new ProcessStartInfo(path) { UseShellExecute = true });
         }
@@ -40,11 +47,25 @@ public sealed class ShellService
             }
             finally { NativeMethods.ILFree(pidl); }
         }
-        Process.Start(new ProcessStartInfo("explorer.exe", $"/select,{Quote(path)}") { UseShellExecute = false });
+        Process.Start(new ProcessStartInfo(ExplorerPath, $"/select,{Quote(path)}") { UseShellExecute = false });
     }
 
+    /// <summary>
+    /// Shows the shell Properties sheet. When elevated it is shown by the desktop's Explorer, not in-process: the sheet's
+    /// "Open with" / "Change…" buttons launch programs, and those must not inherit admin rights.
+    /// </summary>
     public void ShowProperties(string path)
     {
+        if (IsElevated)
+        {
+            try { DesktopShell.ShowProperties(path); return; }
+            catch (InvalidOperationException ex)
+            {
+                Log.Warn($"Properties via desktop shell failed for {path}: {ex.InnerException?.Message ?? ex.Message}");
+                Reveal(path);
+                throw new InvalidOperationException("Properties isn't available while Turbo is on — shown in Explorer instead (press Alt+Enter there)", ex);
+            }
+        }
         var info = new NativeMethods.SHELLEXECUTEINFOW
         {
             cbSize = Marshal.SizeOf<NativeMethods.SHELLEXECUTEINFOW>(),

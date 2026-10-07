@@ -78,7 +78,17 @@ When FileHound runs elevated it opens files through the normal desktop shell, so
 
 ## Build & run
 
-Requirements: Windows 10/11 and the [.NET 10 SDK](https://dotnet.microsoft.com/download).
+Requirements: Windows 10/11 and any [.NET 10 SDK](https://dotnet.microsoft.com/download). The published `FileHound.exe` is self-contained, so people who only run it need no .NET at all.
+
+The quickest route is the bootstrap script. It installs the .NET 10 SDK if it is missing (winget first, Microsoft's per-user `dotnet-install` script as a fallback), then builds:
+
+```powershell
+.\build.ps1                 # check/install the SDK, build
+.\build.ps1 -Test           # ...and run the tests
+.\build.ps1 -Test -Install  # ...and publish FileHound.exe, install it for this user, add a Start Menu shortcut
+```
+
+Or by hand:
 
 ```bash
 dotnet build FileHound.sln -c Release

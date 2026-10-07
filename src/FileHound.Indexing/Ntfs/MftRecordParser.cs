@@ -76,7 +76,7 @@ public static class MftRecordParser
             uint type = BinaryPrimitives.ReadUInt32LittleEndian(record[offset..]);
             if (type == 0xFFFFFFFF) return true;
             int length = (int)BinaryPrimitives.ReadUInt32LittleEndian(record[(offset + 4)..]);
-            if (length < 16 || offset + length > limit) return false;
+            if (length < 16 || length > limit - offset) return false; // subtract, don't add: a corrupt length can overflow
             var attr = record.Slice(offset, length);
             bool nonResident = attr[8] != 0;
             int nameLength = attr[9];
@@ -133,7 +133,7 @@ public static class MftRecordParser
         if (attr.Length < 24) return false;
         int len = (int)BinaryPrimitives.ReadUInt32LittleEndian(attr[16..]);
         int off = BinaryPrimitives.ReadUInt16LittleEndian(attr[20..]);
-        if (off < 24 || len < 0 || off + len > attr.Length) return false;
+        if (off < 24 || len < 0 || len > attr.Length - off) return false; // subtract, don't add: a corrupt length can overflow
         value = attr.Slice(off, len);
         return true;
     }

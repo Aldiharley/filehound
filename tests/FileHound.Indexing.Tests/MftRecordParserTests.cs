@@ -167,4 +167,29 @@ public class MftRecordParserTests
         var b = Fixed(new MftRecordBuilder().InUse().StandardInfo(When).Raw(bad).Build());
         Assert.False(MftRecordParser.TryParse(b, out _));
     }
+
+    [Fact]
+    public void Huge_attribute_length_does_not_overflow_the_bounds_check()
+    {
+        // offset + 0x7FFFFFF0 wraps negative with int arithmetic; a wrapped check would let Slice throw.
+        var bad = new byte[16];
+        BitConverter.GetBytes(0x30u).CopyTo(bad, 0);
+        BitConverter.GetBytes(0x7FFFFFF0u).CopyTo(bad, 4);
+        var b = Fixed(new MftRecordBuilder().InUse().StandardInfo(When).Raw(bad).Build());
+        Assert.False(MftRecordParser.TryParse(b, out _));
+    }
+
+    [Fact]
+    public void Huge_resident_value_length_is_skipped_without_throwing()
+    {
+        // A $FILE_NAME whose value length field is near int.MaxValue: the attribute is ignored, the record still parses.
+        var bad = new byte[32];
+        BitConverter.GetBytes(0x30u).CopyTo(bad, 0);            // $FILE_NAME
+        BitConverter.GetBytes(32u).CopyTo(bad, 4);              // attribute length (fits in the record)
+        BitConverter.GetBytes(0x7FFFFFF0u).CopyTo(bad, 16);     // value length: 24 + this overflows int
+        BitConverter.GetBytes((ushort)24).CopyTo(bad, 20);      // value offset
+        var b = Fixed(new MftRecordBuilder().InUse().StandardInfo(When).Raw(bad).FileName(5, "ok.txt").Build());
+        Assert.True(MftRecordParser.TryParse(b, out var r));
+        Assert.Equal("ok.txt", r.Name.ToString());
+    }
 }

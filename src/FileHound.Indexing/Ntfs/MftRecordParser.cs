@@ -32,10 +32,14 @@ public static class MftRecordParser
 
     /// <summary>
     /// Verifies the FILE signature and undoes the update-sequence protection in place.
-    /// Returns false for a bad signature or a torn (partially written) record. With
-    /// <paramref name="acceptAlreadyApplied"/>, a record whose sector tails already hold the saved values (as
-    /// returned by FSCTL_GET_NTFS_FILE_RECORD, which reads NTFS's in-memory copy) is accepted unchanged.
+    /// For records read from disk, returns false for a bad signature or a torn (partially written) record.
     /// </summary>
+    /// <param name="acceptAlreadyApplied">
+    /// The record came from NTFS's in-memory copy (FSCTL_GET_NTFS_FILE_RECORD), which is already fixed up. Its update
+    /// sequence array may be stale — a record modified in memory but not yet flushed keeps the saved values from its
+    /// last disk write — so it cannot be used for validation. Such records are accepted as returned (only a record that
+    /// still carries the USN in every sector tail is un-protected). Torn-write detection only applies to disk reads.
+    /// </param>
     public static bool ApplyFixups(Span<byte> record, bool acceptAlreadyApplied = false)
     {
         if (record.Length < 48 || !record[..4].SequenceEqual("FILE"u8)) return false;
@@ -43,20 +47,16 @@ public static class MftRecordParser
         int usaCount = BinaryPrimitives.ReadUInt16LittleEndian(record[6..]);
         if (usaCount < 2 || usaOffset + 2 * usaCount > record.Length || (usaCount - 1) * SectorStride > record.Length) return false;
         ushort usn = BinaryPrimitives.ReadUInt16LittleEndian(record[usaOffset..]);
-        bool allProtected = true, allApplied = true;
-        for (int i = 1; i < usaCount; i++)
-        {
-            ushort tail = BinaryPrimitives.ReadUInt16LittleEndian(record[(i * SectorStride - 2)..]);
-            allProtected &= tail == usn;
-            allApplied &= tail == BinaryPrimitives.ReadUInt16LittleEndian(record[(usaOffset + 2 * i)..]);
-        }
+        bool allProtected = true;
+        for (int i = 1; i < usaCount && allProtected; i++)
+            allProtected = BinaryPrimitives.ReadUInt16LittleEndian(record[(i * SectorStride - 2)..]) == usn;
         if (allProtected)
         {
             for (int i = 1; i < usaCount; i++)
                 record.Slice(usaOffset + 2 * i, 2).CopyTo(record.Slice(i * SectorStride - 2, 2));
             return true;
         }
-        return acceptAlreadyApplied && allApplied;
+        return acceptAlreadyApplied;
     }
 
     /// <summary>Parses a record whose fixups were already applied. Returns false when the record is malformed.</summary>

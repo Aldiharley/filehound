@@ -66,6 +66,15 @@ One sequential pass over the raw `$MFT` yields names, parents, attributes, sizes
 - `IndexManager.RunTurboAsync` sets `needFill = MetadataFiller.HasIncompleteMetadata(v)`, using `onlyIncomplete: true`. With the raw reader nothing is incomplete, so the fill is skipped; the enumeration path still fills everything.
 - `turbo-bench` reports raw vs enumeration timings, entry counts and a 2,000-file size-agreement sample.
 
+## Addendum — validation findings (2026-10-07)
+- **C: (system volume):** every `ReadFile` on the volume handle fails with Win32 error 50 (`ERROR_NOT_SUPPORTED`), including the boot sector, under every set of open flags, even with correct alignment. Control codes still succeed. BitLocker is off; Bitdefender is active and is the likely blocker of raw disk reads.
+  - **Added tier:** `FileRecordMftReader`. It calls `FSCTL_GET_NTFS_FILE_RECORD` on each range from the top down, one call per in-use record, with parallel workers that each have their own handle.
+  - **Measured:** 5.03M entries in 7.8 s with complete metadata, against 9 s + 20 s for enumeration plus fill. With one thread it takes 21.7 s.
+- **Fixups on in-memory records:** records returned by the control code are NTFS's in-memory copies, which are already fixed up. Their update sequence array can be stale when a record has changed in memory but not been flushed. Validating those records against it rejected about 1–2k recently changed records and orphaned about 27k descendants, the 0.9% gap against enumeration. Such records are now accepted as returned. Torn-write checks remain for raw disk reads.
+- **M: (HDD, 2.5M entries):** the raw tier matches enumeration exactly on entry count (100%), finds 1,999 of 2,000 paths (the one miss is a temporary build file), and matches 2,000 of 2,000 sizes. It took 25.6 s cold and 9.5 s warm.
+- **F: (8 TB):** the `$MFT` there has an attribute list, so the raw tier steps aside and the file-record tier handles it. Supporting raw reads of attribute-list MFTs is future work.
+- **Hard links:** for about 171k records on C:, enumeration and the parser report different link names for the same record. Both index one name per record; indexing every link name is future work.
+
 ## Testing
 - **Unit tests** on synthetic FILE records built by a test helper:
   - the fixups round-trip;

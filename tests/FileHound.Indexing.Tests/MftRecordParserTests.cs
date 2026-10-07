@@ -58,13 +58,24 @@ public class MftRecordParserTests
     }
 
     [Fact]
-    public void Already_applied_check_still_rejects_garbage()
+    public void In_memory_record_with_stale_update_sequence_array_is_accepted()
     {
-        var b = new MftRecordBuilder().InUse().StandardInfo(When).FileName(5, "a.txt").Build();
+        // Real case (mft-diff on C:): a record modified in memory but not yet flushed. NTFS returns it fixed up, but the
+        // update sequence array still holds values from the last disk write: tails=[6444,0000], saved=[0000,0000].
+        var b = new MftRecordBuilder().InUse().StandardInfo(When).FileName(5, "notion-cache_0").ResidentData(600).Build();
         Assert.True(MftRecordParser.ApplyFixups(b));
-        b[510] ^= 0x5A; // tail matches neither the USN nor the saved value
-        Assert.False(MftRecordParser.ApplyFixups(b, acceptAlreadyApplied: true));
+        b[510] = 0x44; b[511] = 0x64;                         // current data in the first sector tail
+        var expected = (byte[])b.Clone();
+        Assert.False(MftRecordParser.ApplyFixups(b));           // a raw disk read in this state would be torn
+        Assert.True(MftRecordParser.ApplyFixups(b, acceptAlreadyApplied: true));
+        Assert.Equal(expected, b);                              // left exactly as NTFS returned it
+        Assert.True(MftRecordParser.TryParse(b, out var r));
+        Assert.Equal("notion-cache_0", r.Name.ToString());
     }
+
+    [Fact]
+    public void In_memory_record_still_requires_the_FILE_signature() =>
+        Assert.False(MftRecordParser.ApplyFixups(new byte[1024], acceptAlreadyApplied: true));
 
     [Fact]
     public void Parses_name_parent_size_time_attributes()

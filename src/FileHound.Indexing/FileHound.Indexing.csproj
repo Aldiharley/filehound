@@ -11,5 +11,6 @@
   </ItemGroup>
   <ItemGroup>
     <InternalsVisibleTo Include="FileHound.Indexing.Tests" />
+    <InternalsVisibleTo Include="filehound-cli" />
   </ItemGroup>
 </Project>

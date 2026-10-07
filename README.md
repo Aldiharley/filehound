@@ -29,10 +29,19 @@ FileHound indexes every file and folder on all your local drives (C:, D:, E:, US
 
 | | Standard (default) | Turbo |
 |---|---|---|
-| How | Parallel folder walk (`FileSystemEnumerable`) | Reads the NTFS master file table (`FSCTL_ENUM_USN_DATA`), the technique Everything uses |
+| How | Parallel folder walk (`FileSystemEnumerable`) | Reads the NTFS master file table (MFT) directly, the technique Everything uses; three tiers, see below |
 | Live updates | FileSystemWatcher | USN change journal |
-| Speed (C:, 4–5M entries) | 24 s warm / 161 s cold | MFT scan 9 s warm / 78 s cold, sizes filled in ~19 s |
+| Speed (C:, ~5M entries) | 24 s warm / 161 s cold | 7.8 s, including sizes and dates (file-record tier) |
+| Speed (M:, 2.5M entries, HDD) | | 25.6 s cold / 9.5 s warm, including sizes and dates (raw tier) |
 | Restart | snapshot in ~1 s, then a background refresh walk | snapshot in ~1.5 s, journal catch-up, ready in ~2.3 s |
+
+Turbo tries three ways of reading the MFT, fastest first, and falls back automatically:
+
+1. **Raw `$MFT` read.** Sequential 4 MB reads straight from the volume, with names, sizes and dates in one pass. This is used unless the MFT is fragmented across extension records.
+2. **Per-record reads with `FSCTL_GET_NTFS_FILE_RECORD`.** Several threads, one call per in-use record, still in one pass. This is used when raw volume reads are blocked; on the development PC, security software refuses them on C: with Win32 error 50.
+3. **`FSCTL_ENUM_USN_DATA`.** This returns names only, and sizes and dates are filled in afterwards.
+
+Turbo lists each hard-linked file under one of its names (as Everything does), while Standard mode lists every link.
 | Needs | nothing | administrator approval, given once per launch via **Enable Turbo** |
 
 When FileHound runs elevated it opens files through the normal desktop shell, so they never inherit admin rights. Drag-out is disabled while elevated, because Windows blocks dragging from an elevated app into a normal one.

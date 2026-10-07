@@ -33,6 +33,13 @@ if (command == "turbo-validate")
     return await TurboValidation.RunAsync(letter, turboData, report);
 }
 
+if (command == "mft-diff")
+{
+    // filehound-cli mft-diff C --report <file>   (must run elevated)
+    string report = TakeOption(argList, "--report") ?? Path.Combine(Path.GetTempPath(), "filehound-mft-diff.txt");
+    return MftDiff.Run(char.ToUpperInvariant((rest.FirstOrDefault() ?? "C")[0]), report);
+}
+
 if (command == "raw-probe")
 {
     // filehound-cli raw-probe C --report <file>   (must run elevated)
@@ -46,8 +53,10 @@ if (command == "turbo-bench")
     // Per drive: the automatic tiered scan first (cold if the MFT isn't cached), the file-record tier single-threaded
     // (first drive only), enumeration (+ metadata fill timing on the first drive), then a warm automatic scan.
     // Compares entry counts and path sets with enumeration, and sizes with the disk.
-    var letters = rest.Count > 0 ? rest.Select(s => char.ToUpperInvariant(s[0])).ToList() : ['C'];
     string report = TakeOption(argList, "--report") ?? Path.Combine(Path.GetTempPath(), "filehound-turbo-bench.txt");
+    // Drive arguments only ("C", "C:"); options were removed above, but `rest` was captured before that.
+    var letters = argList.Skip(1).Where(s => s.Length <= 2 && char.IsAsciiLetter(s[0]) && (s.Length == 1 || s[1] == ':'))
+        .Select(s => char.ToUpperInvariant(s[0])).DefaultIfEmpty('C').ToList();
     var lines = new List<string> { $"elevated={Elevation.IsElevated}  {DateTime.Now:yyyy-MM-dd HH:mm:ss}" };
     void Line(string s) { lines.Add(s); File.WriteAllLines(report, lines); }
     bool first = true;

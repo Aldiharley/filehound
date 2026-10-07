@@ -68,9 +68,13 @@ public sealed class IndexManagerTests : IDisposable
         IndexManager.Log = log.Enqueue;
         try
         {
-            await using var m2 = new IndexManager(Options());
+            // On a fast machine the two-entry refresh walk finishes before this test can look, so it would capture
+            // the replacement instead of the snapshot. Hold the walk until the snapshot reference is in hand.
+            using var walkMayStart = new ManualResetEventSlim();
+            await using var m2 = new IndexManager(Options()) { BeforeRefreshWalk = () => walkMayStart.Wait(TimeSpan.FromSeconds(10)) };
             await m2.StartAsync();
             var weak = WeakFirstVolume(m2);
+            walkMayStart.Set();
             await m2.WaitForIdleAsync();
             var d = m2.Drives[0];
             Assert.False(IsCurrentVolume(weak, m2),

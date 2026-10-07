@@ -69,6 +69,9 @@ public sealed class IndexManager : IAsyncDisposable
     /// <summary>Optional diagnostic sink (wired to the app log).</summary>
     public static Action<string>? Log { get; set; }
 
+    /// <summary>Test hook: runs on the drive task right before a refresh walk starts replacing a published snapshot.</summary>
+    internal Action? BeforeRefreshWalk { get; set; }
+
     /// <summary>Raised (throttled, background thread) when drive states change.</summary>
     public event EventHandler? StateChanged;
     /// <summary>Raised (throttled, background thread) after live updates or a scan changed searchable content.</summary>
@@ -377,6 +380,7 @@ public sealed class IndexManager : IAsyncDisposable
                 Update(slot, s => s with { Entries = streaming ? p.Entries : s.Entries, Progress = p.Fraction, Skipped = p.Skipped });
                 if (streaming) RaiseIndexChanged();
             });
+            if (!streaming) BeforeRefreshWalk?.Invoke();
             var result = await walker.WalkAsync(v, drive.Root, VolumeIndex.RootEntry, progress, ct).ConfigureAwait(false);
             ct.ThrowIfCancellationRequested();
             v.TrimExcess();

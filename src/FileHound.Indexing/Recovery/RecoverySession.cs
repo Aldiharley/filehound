@@ -110,18 +110,22 @@ public sealed class RecoverySession : IDisposable
         RecycleBinSource.ToCandidates(RecycleBinSource.Enumerate([Drive], allUsers && IsElevated)).ToList();
 
     /// <summary>Puts a Recycle Bin item back where it was. Returns the final path.</summary>
-    public Task<string> RestoreAsync(RecoveryCandidate c, bool keepBoth) => Task.Run(() =>
-        c.Key is RecycleBinItem item ? RecycleBinSource.Restore(item, keepBoth)
-        : throw new NotSupportedException($"{c.Source} items are recovered to another drive, not restored in place."));
+    public Task<string> RestoreAsync(RecoveryCandidate c, bool keepBoth) => Task.Run(() => c.Key switch
+    {
+        RecycleBinItem item => RecycleBinSource.Restore(item, keepBoth),
+        ShadowVersion v => ShadowCopySource.RestoreInPlace(v),
+        _ => throw new NotSupportedException($"{c.Source} items are recovered to another drive, not restored in place."),
+    });
 
     /// <summary>Copies a candidate into the session's recovery folder on <paramref name="destinationFolder"/>, hashing it on the way.</summary>
     public async Task<RecoveredFile> RecoverAsync(RecoveryCandidate c, string destinationFolder, CancellationToken ct)
     {
-        if (!IsDifferentVolume(destinationFolder, Drive, out string why) && c.Source is not RecoverySource.RecycleBin)
+        // Recycle Bin and snapshot data cannot be overwritten by the copy, so those may land on the same volume.
+        if (!IsDifferentVolume(destinationFolder, Drive, out string why) && c.Source is not (RecoverySource.RecycleBin or RecoverySource.ShadowCopy))
             return Fail(c, why);
         // Refuse before creating the recovery folder: nothing to put in it.
         if (c.Source is RecoverySource.DeletionLog) return Fail(c, "Use the Undelete tab to bring this file back");
-        if (c.Source is not (RecoverySource.RecycleBin or RecoverySource.Undelete)) return Fail(c, $"{c.Source} recovery is not available yet");
+        if (c.Source is not (RecoverySource.RecycleBin or RecoverySource.Undelete or RecoverySource.ShadowCopy)) return Fail(c, $"{c.Source} recovery is not available yet");
         var folder = _recoveryFolder ??= Path.Combine(destinationFolder, $"FileHound Recovery {StartedUtc.ToLocalTime():yyyy-MM-dd HHmm}");
         RecoveredFile result;
         try
@@ -131,6 +135,7 @@ public sealed class RecoverySession : IDisposable
                 RecoverySource.RecycleBin when c.Key is RecycleBinItem item => await Task.Run(() => RecoverRecycled(c, item, folder, ct), ct),
                 RecoverySource.Undelete when c.Key is UndeleteRecord u && u.IsDirectory => await Task.Run(() => RecoverUndeletedTree(c, u, folder, ct), ct),
                 RecoverySource.Undelete when c.Key is UndeleteRecord u => await Task.Run(() => RecoverUndeleted(c, u, folder, ct), ct),
+                RecoverySource.ShadowCopy when c.Key is ShadowVersion v => await Task.Run(() => RecoverShadow(c, v, folder, ct), ct),
                 _ => Fail(c, $"{c.Source} recovery is not available yet"),
             };
         }
@@ -142,6 +147,14 @@ public sealed class RecoverySession : IDisposable
         lock (_recovered) _recovered.Add(result);
         AppendManifest(folder, result);
         return result;
+    }
+
+    private static RecoveredFile RecoverShadow(RecoveryCandidate c, ShadowVersion v, string folder, CancellationToken ct)
+    {
+        string path = ShadowCopySource.SaveTo(v, folder);
+        if (v.IsDirectory) return new RecoveredFile(c, path, DirectorySize(path), "", RecoveryGrade.Excellent, null);
+        ct.ThrowIfCancellationRequested();
+        return new RecoveredFile(c, path, new FileInfo(path).Length, Sha256Of(path), RecoveryGrade.Excellent, null);
     }
 
     private RecoveredFile RecoverUndeleted(RecoveryCandidate c, UndeleteRecord u, string folder, CancellationToken ct)

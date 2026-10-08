@@ -4,7 +4,7 @@
 
 **Find any file on any drive as you type. Bring deleted ones back.**
 
-FileHound is an open-source Windows 11 desktop app (C#, .NET 10, WPF) that indexes every file and folder on all your local drives and finds them instantly, even when you only remember part of a name or misspell it. Since 1.2 it also has a **Recovery** page that brings deleted files back from five sources, from the Recycle Bin all the way down to signature-carving the drive's free space, and tells you honestly what can and cannot come back.
+FileHound is a free, open-source file search and file recovery app for Windows 11 (C#, .NET 10, WPF). It indexes every file and folder on all your local drives and finds them instantly, even when you only remember part of a name or misspell it. Since 1.2 it also has a **Recovery** page that brings deleted files back from five sources, from the Recycle Bin all the way down to signature-carving the drive's free space, and tells you honestly what can and cannot come back.
 
 It exists because the two things you want most when a file is missing, *where is it?* and *can I get it back?*, usually live in two different tools, one of which is grey and scary. FileHound puts both behind one hotkey, in a soft pastel "clay" interface with a hound who does the sniffing.
 

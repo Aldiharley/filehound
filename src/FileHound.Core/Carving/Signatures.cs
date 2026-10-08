@@ -19,6 +19,12 @@ public static class Signatures
         new("bmp", "Bitmap image", ".bmp", FileCategory.Image, 128 * MB, 0, ["BM"u8.ToArray()], ImageValidators.Bmp),
         new("tif", "TIFF image", ".tif", FileCategory.Image, 512 * MB, 0, [[0x49, 0x49, 0x2A, 0x00], [0x4D, 0x4D, 0x00, 0x2A]], ImageValidators.Tiff),
         new("webp", "WebP image", ".webp", FileCategory.Image, 64 * MB, 0, ["RIFF"u8.ToArray()], ImageValidators.WebP),
+        new("wav", "WAV audio", ".wav", FileCategory.Audio, 2048 * MB, 0, ["RIFF"u8.ToArray()], MediaValidators.Riff),
+        new("mp4", "MP4 / MOV video", ".mp4", FileCategory.Video, 4096 * MB, 4, ["ftyp"u8.ToArray()], MediaValidators.IsoBmff),
+        new("mkv", "Matroska / WebM video", ".mkv", FileCategory.Video, 4096 * MB, 0, [[0x1A, 0x45, 0xDF, 0xA3]], MediaValidators.Mkv),
+        new("ogg", "OGG audio", ".ogg", FileCategory.Audio, 512 * MB, 0, ["OggS"u8.ToArray()], MediaValidators.Ogg),
+        new("mp3", "MP3 audio", ".mp3", FileCategory.Audio, 512 * MB, 0, ["ID3"u8.ToArray(), [0xFF, 0xFB], [0xFF, 0xFA], [0xFF, 0xF3], [0xFF, 0xF2]], MediaValidators.Mp3),
+        new("flac", "FLAC audio", ".flac", FileCategory.Audio, 1024 * MB, 0, ["fLaC"u8.ToArray()], MediaValidators.Flac),
     ];
 
     private static readonly CarveType[][] s_byFirstByte = Build();

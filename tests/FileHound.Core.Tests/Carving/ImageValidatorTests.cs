@@ -49,7 +49,7 @@ public class ImageValidatorTests
         var type = Signatures.ById(id)!;
         Assert.True(type.MatchesMagic(file));
         Assert.Contains(type, Signatures.ByFirstByte(file[0]));
-        foreach (var other in Signatures.All.Where(t => t.Id != id && t.Id != "webp"))
+        foreach (var other in Signatures.All.Where(t => t.Id != id && !t.Magics.Any(m => type.Magics.Any(x => x.AsSpan().SequenceEqual(m)))))
             Assert.False(other.MatchesMagic(file), $"{other.Id} matched {id}");
     }
 

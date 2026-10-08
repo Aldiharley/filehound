@@ -9,9 +9,17 @@ internal sealed class MftRecordBuilder(int size = 1024)
     public const ushort Usn = 0x0042;
     private readonly List<byte[]> _attributes = [];
     private ushort _flags;
+    private ushort _sequence = 1;
     private long _baseRecord;
 
     public static long FileTime(DateTime utc) => utc.ToFileTimeUtc();
+
+    /// <summary>Record sequence number (header @0x10); a record built without <see cref="InUse"/> is a deleted one.</summary>
+    public MftRecordBuilder Sequence(ushort sequence)
+    {
+        _sequence = sequence;
+        return this;
+    }
 
     public MftRecordBuilder InUse(bool directory = false)
     {
@@ -34,10 +42,20 @@ internal sealed class MftRecordBuilder(int size = 1024)
         return Resident(0x10, v);
     }
 
-    public MftRecordBuilder FileName(long parentRecord, string name, byte nameSpace = 1)
+    public MftRecordBuilder FileName(long parentRecord, string name, byte nameSpace = 1, ushort parentSequence = 3,
+        DateTime? createdUtc = null, DateTime? modifiedUtc = null, long realSize = 0)
     {
         var v = new byte[66 + name.Length * 2];
-        BinaryPrimitives.WriteUInt64LittleEndian(v, (ulong)parentRecord | (3UL << 48));
+        BinaryPrimitives.WriteUInt64LittleEndian(v, (ulong)parentRecord | ((ulong)parentSequence << 48));
+        if (createdUtc is { } c) BinaryPrimitives.WriteInt64LittleEndian(v.AsSpan(8), FileTime(c));
+        if (modifiedUtc is { } m)
+        {
+            BinaryPrimitives.WriteInt64LittleEndian(v.AsSpan(16), FileTime(m));
+            BinaryPrimitives.WriteInt64LittleEndian(v.AsSpan(24), FileTime(m));
+            BinaryPrimitives.WriteInt64LittleEndian(v.AsSpan(32), FileTime(m));
+        }
+        BinaryPrimitives.WriteInt64LittleEndian(v.AsSpan(40), (realSize + 4095) / 4096 * 4096);
+        BinaryPrimitives.WriteInt64LittleEndian(v.AsSpan(48), realSize);
         v[64] = (byte)name.Length;
         v[65] = nameSpace;
         MemoryMarshal.AsBytes(name.AsSpan()).CopyTo(v.AsSpan(66));
@@ -48,7 +66,8 @@ internal sealed class MftRecordBuilder(int size = 1024)
 
     public MftRecordBuilder AttributeList() => Resident(0x20, new byte[32]);
 
-    public MftRecordBuilder NonResidentData(long dataSize, byte[] runs, long startVcn = 0, string? streamName = null)
+    public MftRecordBuilder NonResidentData(long dataSize, byte[] runs, long startVcn = 0, string? streamName = null,
+        ushort flags = 0, long? initializedSize = null, byte compressionUnit = 0)
     {
         int nameBytes = (streamName?.Length ?? 0) * 2;
         int runsOffset = Align8(64 + nameBytes);
@@ -59,12 +78,14 @@ internal sealed class MftRecordBuilder(int size = 1024)
         a[8] = 1;
         a[9] = (byte)(streamName?.Length ?? 0);
         BinaryPrimitives.WriteUInt16LittleEndian(a.AsSpan(10), 64);
+        BinaryPrimitives.WriteUInt16LittleEndian(a.AsSpan(12), flags);
         if (streamName is not null) MemoryMarshal.AsBytes(streamName.AsSpan()).CopyTo(a.AsSpan(64));
         BinaryPrimitives.WriteInt64LittleEndian(a.AsSpan(16), startVcn);
         BinaryPrimitives.WriteUInt16LittleEndian(a.AsSpan(32), (ushort)runsOffset);
+        a[34] = compressionUnit;
         BinaryPrimitives.WriteInt64LittleEndian(a.AsSpan(40), (dataSize + 4095) / 4096 * 4096);
         BinaryPrimitives.WriteInt64LittleEndian(a.AsSpan(48), dataSize);
-        BinaryPrimitives.WriteInt64LittleEndian(a.AsSpan(56), dataSize);
+        BinaryPrimitives.WriteInt64LittleEndian(a.AsSpan(56), initializedSize ?? dataSize);
         runs.CopyTo(a.AsSpan(runsOffset));
         _attributes.Add(a);
         return this;
@@ -103,7 +124,7 @@ internal sealed class MftRecordBuilder(int size = 1024)
         int usaCount = size / 512 + 1;
         BinaryPrimitives.WriteUInt16LittleEndian(r.AsSpan(4), 48);
         BinaryPrimitives.WriteUInt16LittleEndian(r.AsSpan(6), (ushort)usaCount);
-        BinaryPrimitives.WriteUInt16LittleEndian(r.AsSpan(16), 1);
+        BinaryPrimitives.WriteUInt16LittleEndian(r.AsSpan(16), _sequence);
         BinaryPrimitives.WriteUInt16LittleEndian(r.AsSpan(18), 1);
         int first = Align8(48 + 2 * usaCount);
         BinaryPrimitives.WriteUInt16LittleEndian(r.AsSpan(20), (ushort)first);

@@ -1,4 +1,4 @@
-﻿using System.Buffers.Binary;
+using System.Buffers.Binary;
 using System.IO.Hashing;
 using System.Runtime.InteropServices;
 using System.Text;
@@ -18,7 +18,17 @@ public static class SnapshotSerializer
 
     public static string FileNameFor(char letter, uint serial) => $"{char.ToUpperInvariant(letter)}_{serial:X8}.fhx";
 
+    // One writer per snapshot file: two saves of the same drive can be requested at once (scan completions, the
+    // periodic loop, shutdown), and concurrent replace-moves of one target fail with a sharing violation.
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, object> s_fileLocks = new(StringComparer.OrdinalIgnoreCase);
+
     public static void Save(VolumeIndex v, string path)
+    {
+        var gate = s_fileLocks.GetOrAdd(Path.GetFullPath(path), _ => new object());
+        lock (gate) SaveLocked(v, path);
+    }
+
+    private static void SaveLocked(VolumeIndex v, string path)
     {
         // 1) Copy a compacted image under the read lock (fast), 2) write outside the lock.
         int[] parents; ushort[] lens; ushort[] flags; long[] sizes; long[] mods; long[]? records; char[] names; int n;
@@ -58,7 +68,9 @@ public static class SnapshotSerializer
         finally { v.Lock.ExitReadLock(); }
 
         Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(path))!);
-        var tmp = path + ".tmp";
+        // Unique per call: saves of the same drive can overlap (scan completions, the periodic loop, shutdown), and a
+        // shared temp name made the second one fail with a sharing violation.
+        var tmp = $"{path}.{Guid.NewGuid():N}.tmp";
         using (var fs = new FileStream(tmp, FileMode.Create, FileAccess.Write, FileShare.None, 1 << 20))
         {
             var hash = new XxHash64();

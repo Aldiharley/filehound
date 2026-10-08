@@ -230,10 +230,16 @@ public sealed class IndexManager : IAsyncDisposable
         return true;
     }
 
+    private readonly SemaphoreSlim _saveGate = new(1, 1);
+
     public async Task SaveSnapshotsAsync()
     {
         List<Slot> slots;
         lock (_gate) slots = _slots.Values.ToList();
+        // One save pass at a time: a 5M-entry snapshot takes seconds, and every drive's completion triggers a pass.
+        await _saveGate.WaitAsync().ConfigureAwait(false);
+        try
+        {
         await Task.Run(() =>
         {
             foreach (var s in slots)
@@ -256,6 +262,8 @@ public sealed class IndexManager : IAsyncDisposable
                 }
             }
         }).ConfigureAwait(false);
+        }
+        finally { _saveGate.Release(); }
     }
 
     private void StartDrive(Slot slot, bool useSnapshot, VolumeIndex? standIn, TaskCompletionSource? loaded)
@@ -337,6 +345,7 @@ public sealed class IndexManager : IAsyncDisposable
             var excluded = _excluded;
             var scanner = new MftScanner();
             v = await Task.Run(() => scanner.Scan(drive, excluded, progress, ct), ct).ConfigureAwait(false);
+            if (scanner.CreatedJournal) Log?.Invoke($"Indexing {drive.Letter}: the volume had no change journal; created one ({MftScanner.JournalMaximumSize >> 20} MB) so Turbo can track changes");
             if (scanner.FallbackReason is not null) Log?.Invoke($"Indexing {drive.Letter}: faster MFT tiers skipped ({scanner.FallbackReason}); used {scanner.Method}");
             ct.ThrowIfCancellationRequested();
             Publish(slot, v);

@@ -31,6 +31,21 @@ public sealed class MftScanner
         return true;
     }
 
+    /// <summary>True when the last <see cref="Scan"/> had to create the volume's change journal first.</summary>
+    public bool CreatedJournal { get; private set; }
+
+    public const ulong JournalMaximumSize = 64UL << 20, JournalAllocationDelta = 8UL << 20;
+
+    /// <summary>FSCTL_CREATE_USN_JOURNAL needs a writable volume handle; this is the one place indexing writes to a drive.</summary>
+    internal static unsafe bool TryCreateJournal(char letter)
+    {
+        using var w = Kernel32.CreateFile($@"\\.\{char.ToUpperInvariant(letter)}:", Kernel32.GENERIC_READ | Kernel32.GENERIC_WRITE,
+            Kernel32.FILE_SHARE_READ | Kernel32.FILE_SHARE_WRITE, 0, Kernel32.OPEN_EXISTING, Kernel32.FILE_FLAG_BACKUP_SEMANTICS, 0);
+        if (w.IsInvalid) return false;
+        var data = new CreateUsnJournalData { MaximumSize = JournalMaximumSize, AllocationDelta = JournalAllocationDelta };
+        return Kernel32.DeviceIoControl(w, Kernel32.FSCTL_CREATE_USN_JOURNAL, &data, sizeof(CreateUsnJournalData), null, 0, out _, 0);
+    }
+
     /// <summary>Timing breakdown of the last <see cref="Scan"/> (diagnostics).</summary>
     public TimeSpan IoTime { get; private set; }
     public TimeSpan ParseTime { get; private set; }
@@ -62,7 +77,15 @@ public sealed class MftScanner
         // Captured before reading: the USN updater replays everything that changes while we scan.
         UsnJournalDataV1 jd;
         if (!Kernel32.DeviceIoControl(h, Kernel32.FSCTL_QUERY_USN_JOURNAL, null, 0, &jd, sizeof(UsnJournalDataV1), out _, 0))
-            throw new Win32Exception(Marshal.GetLastPInvokeError(), $"No USN journal on {drive.Letter}:");
+        {
+            int err = Marshal.GetLastPInvokeError();
+            // A freshly formatted volume has no change journal. Create one (as Everything does): without it there are no
+            // live updates and no deletion log for the drive. Sized like the Windows default for data volumes.
+            if (err != Kernel32.ERROR_JOURNAL_NOT_ACTIVE || !TryCreateJournal(drive.Letter)
+                || !Kernel32.DeviceIoControl(h, Kernel32.FSCTL_QUERY_USN_JOURNAL, null, 0, &jd, sizeof(UsnJournalDataV1), out _, 0))
+                throw new Win32Exception(err, $"No USN journal on {drive.Letter}:");
+            CreatedJournal = true;
+        }
 
         if (PreferRaw)
         {

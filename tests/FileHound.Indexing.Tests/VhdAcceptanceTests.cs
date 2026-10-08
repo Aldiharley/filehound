@@ -83,7 +83,9 @@ public class VhdAcceptanceTests
         var drive = DriveDiscovery.GetDrives().Single(d => d.Letter == vhd.Letter);
         using var reader = VolumeReader.Open(drive);
         var bitmap = ClusterBitmap.Load(reader);
-        var index = new MftScanner().Scan(drive, [], null, CancellationToken.None);
+        var scanner = new MftScanner();
+        var index = scanner.Scan(drive, [], null, CancellationToken.None);
+        Assert.True(scanner.CreatedJournal, "a freshly formatted volume has no change journal; the scanner should have created one");
         var candidates = new MftUndeleteSource(reader, bitmap, index, null).Scan(null, CancellationToken.None);
         string about = $"read path={reader.PathDescription}; bitmap={bitmap.Source}; candidates={string.Join(", ", candidates.Select(c => $"{c.Name}:{c.Grade}/{c.PercentIntact}%"))}";
         var dest = Directory.CreateTempSubdirectory("fh-vhd-out-").FullName;

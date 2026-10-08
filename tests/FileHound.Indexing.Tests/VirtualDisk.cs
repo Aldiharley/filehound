@@ -59,9 +59,7 @@ internal sealed class VirtualDisk : IDisposable
         var disk = new VirtualDisk(vhdPath, letter.Value);
         for (int i = 0; i < 50 && !Directory.Exists(disk.Root); i++) Thread.Sleep(200);
         if (!Directory.Exists(disk.Root)) { reason = "volume did not appear"; disk.Dispose(); return null; }
-        // A fresh volume has no change journal; Turbo indexing (and the deletion log) need one, like every real drive has.
-        var fsutil = Process.Start(new ProcessStartInfo("fsutil.exe", $"usn createjournal m=4000000 a=400000 {letter}:") { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true });
-        fsutil?.WaitForExit(30_000);
+        // No change journal on purpose: a fresh volume is exactly the case MftScanner must handle by creating one.
         return disk;
     }
 

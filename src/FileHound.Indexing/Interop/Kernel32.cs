@@ -19,6 +19,8 @@ internal static unsafe partial class Kernel32
     public const uint FSCTL_QUERY_USN_JOURNAL = 0x000900F4;
     public const uint FSCTL_ENUM_USN_DATA = 0x000900B3;
     public const uint FSCTL_READ_USN_JOURNAL = 0x000900BB;
+    public const uint FSCTL_CREATE_USN_JOURNAL = 0x000900E7;
+    public const uint GENERIC_WRITE = 0x40000000;
 
     public const int ERROR_HANDLE_EOF = 38;
     public const int ERROR_INVALID_FUNCTION = 1;
@@ -121,6 +123,13 @@ internal static unsafe partial class Kernel32
     /// <summary>Opens a volume handle such as <c>\\.\C:</c> (requires elevation).</summary>
     public static SafeFileHandle OpenVolume(char letter) =>
         CreateFile($@"\\.\{char.ToUpperInvariant(letter)}:", GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, 0, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, 0);
+}
+
+[StructLayout(LayoutKind.Sequential)]
+internal struct CreateUsnJournalData
+{
+    public ulong MaximumSize;
+    public ulong AllocationDelta;
 }
 
 [StructLayout(LayoutKind.Sequential)]

@@ -9,6 +9,31 @@ public sealed class SnapshotTests : IDisposable
 
     public void Dispose() => Directory.Delete(_dir, recursive: true);
 
+    [Fact]
+    public void Concurrent_saves_of_the_same_path_do_not_collide()
+    {
+        // Two drive scans finishing seconds apart each save every dirty index; the second must not fail on the first's temp file.
+        var path = Path.Combine(_dir, "E_CAFEBABE.fhx");
+        var v = Sample();
+        var errors = new List<Exception>();
+        var start = new ManualResetEventSlim(false);
+        var threads = Enumerable.Range(0, 4).Select(_ => new Thread(() =>
+        {
+            start.Wait();
+            for (int i = 0; i < 20; i++)
+            {
+                try { SnapshotSerializer.Save(v, path); }
+                catch (Exception ex) { lock (errors) errors.Add(ex); }
+            }
+        })).ToList();
+        threads.ForEach(t => t.Start());
+        start.Set();
+        threads.ForEach(t => t.Join());
+        Assert.Empty(errors);
+        Assert.NotNull(SnapshotSerializer.Load(path));
+        Assert.Empty(Directory.GetFiles(_dir, "*.tmp"));
+    }
+
     private static VolumeIndex Sample(IndexMode mode = IndexMode.Standard)
     {
         var v = new VolumeIndex(@"E:\", mode) { VolumeSerial = 0xCAFEBABE, UsnJournalId = 42, NextUsn = 9001 };

@@ -351,11 +351,20 @@ public sealed class RecoverySessionTests : IDisposable
 public class JournalGapOracleTests
 {
     [Fact, Trait("Category", "Elevated")]
-    public void Record_16_is_in_use_and_a_huge_record_number_is_free()
+    public void Record_16_is_in_use_and_the_mft_tail_has_free_slots()
     {
         if (!Elevation.IsElevated) return;
         Assert.Equal(JournalGapOracle.SlotState.Reused, JournalGapOracle.Check('C', 16));
-        Assert.Equal(JournalGapOracle.SlotState.Free, JournalGapOracle.Check('C', long.MaxValue / 4));
+        // A record past the MFT's end is not a slot at all: the FSCTL fails and the oracle says so rather than guessing.
+        Assert.Equal(JournalGapOracle.SlotState.Unknown, JournalGapOracle.Check('C', long.MaxValue / 4));
+        // NTFS grows the MFT in chunks, so the last few thousand valid records always include free ones.
+        using var volume = FileHound.Indexing.Interop.Kernel32.OpenVolume('C');
+        long count = MftScanner.EstimateRecordCount(volume);
+        Assert.True(count > 1024);
+        var tail = Enumerable.Range(1, 4096).Select(i => count - i).ToList();
+        var states = JournalGapOracle.CheckMany('C', tail);
+        Assert.Contains(JournalGapOracle.SlotState.Free, states);
+        Assert.DoesNotContain(JournalGapOracle.SlotState.Unknown, states);
     }
 }
 

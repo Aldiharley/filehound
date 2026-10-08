@@ -38,8 +38,12 @@ public sealed record RecoveryCandidate(
     public string OriginalPath => OriginalFolder is null ? Name : Path.Combine(OriginalFolder, Name);
 }
 
+/// <summary>Where a stretch of a recovered file came from on the volume (DFXML byte_run). <see cref="ImageOffset"/> is -1 when not from disk.</summary>
+public sealed record ByteRun(long FileOffset, long Length, long ImageOffset);
+
 /// <summary>The outcome of recovering one candidate.</summary>
-public sealed record RecoveredFile(RecoveryCandidate Candidate, string RecoveredPath, long Bytes, string Sha256Hex, RecoveryGrade FinalGrade, string? Error)
+public sealed record RecoveredFile(RecoveryCandidate Candidate, string RecoveredPath, long Bytes, string Sha256Hex, RecoveryGrade FinalGrade, string? Error,
+    IReadOnlyList<ByteRun>? Runs = null)
 {
     public bool Succeeded => Error is null;
 }

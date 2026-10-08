@@ -13,8 +13,12 @@ public sealed class RecoverySession : IDisposable
 {
     private readonly IndexManager _manager;
     private readonly List<RecoveredFile> _recovered = [];
+    private readonly object _lazyGate = new();
     private string? _recoveryFolder;
     private bool _disposed;
+    private VolumeReader? _reader;
+    private ClusterBitmap? _bitmap;
+    private IReadOnlyList<RecoveryCandidate> _lastUndelete = [];
 
     public RecoverySession(IndexManager manager, DriveDescriptor drive)
     {
@@ -33,6 +37,43 @@ public sealed class RecoverySession : IDisposable
     public DeletionLog? Log { get; }
     public IReadOnlyList<RecoveredFile> Recovered => _recovered;
     public string? RecoveryFolder => _recoveryFolder;
+
+    /// <summary>Raw access to the drive, opened on first use (throws <see cref="NotSupportedException"/> when no path reads).</summary>
+    public VolumeReader Reader
+    {
+        get { lock (_lazyGate) return _reader ??= VolumeReader.Open(Drive); }
+    }
+
+    /// <summary>The cluster bitmap as of the last scan (or first use).</summary>
+    public ClusterBitmap Bitmap
+    {
+        get { lock (_lazyGate) return _bitmap ??= ClusterBitmap.Load(Reader); }
+    }
+
+    public void RefreshBitmap()
+    {
+        lock (_lazyGate) _bitmap = ClusterBitmap.Load(Reader);
+    }
+
+    /// <summary>"Volume", "Physical disk" or "Shadow copy" once the reader is open; null before.</summary>
+    public string? ReadPath => _reader?.Path switch
+    {
+        VolumeReadPath.Volume => "Volume",
+        VolumeReadPath.PhysicalDisk => "Physical disk",
+        VolumeReadPath.ShadowCopy => "Shadow copy",
+        VolumeReadPath.Memory => "Memory",
+        _ => null,
+    };
+
+    /// <summary>FR-11…FR-14: scans the MFT for deleted records. Re-reads the bitmap first so grades are current.</summary>
+    public Task<IReadOnlyList<RecoveryCandidate>> UndeleteAsync(IProgress<UndeleteProgress>? progress, CancellationToken ct) => Task.Run(() =>
+    {
+        RefreshBitmap();
+        var live = _manager.Volumes.FirstOrDefault(v => v.Root.Equals(Drive.Root, StringComparison.OrdinalIgnoreCase));
+        var found = new MftUndeleteSource(Reader, Bitmap, live, Log?.Entries).Scan(progress, ct);
+        _lastUndelete = found;
+        return (IReadOnlyList<RecoveryCandidate>)found;
+    }, ct);
 
     /// <summary>
     /// Undelete and carving must never write to the drive they read from. Opens the destination and compares the volume
@@ -79,8 +120,8 @@ public sealed class RecoverySession : IDisposable
         if (!IsDifferentVolume(destinationFolder, Drive, out string why) && c.Source is not RecoverySource.RecycleBin)
             return Fail(c, why);
         // Refuse before creating the recovery folder: nothing to put in it.
-        if (c.Source is RecoverySource.DeletionLog) return Fail(c, "Needs undelete, which is coming in the next build");
-        if (c.Source is not RecoverySource.RecycleBin) return Fail(c, $"{c.Source} recovery is not available yet");
+        if (c.Source is RecoverySource.DeletionLog) return Fail(c, "Use the Undelete tab to bring this file back");
+        if (c.Source is not (RecoverySource.RecycleBin or RecoverySource.Undelete)) return Fail(c, $"{c.Source} recovery is not available yet");
         var folder = _recoveryFolder ??= Path.Combine(destinationFolder, $"FileHound Recovery {StartedUtc.ToLocalTime():yyyy-MM-dd HHmm}");
         RecoveredFile result;
         try
@@ -88,18 +129,63 @@ public sealed class RecoverySession : IDisposable
             result = c.Source switch
             {
                 RecoverySource.RecycleBin when c.Key is RecycleBinItem item => await Task.Run(() => RecoverRecycled(c, item, folder, ct), ct),
-                RecoverySource.DeletionLog => Fail(c, "Needs undelete, which is coming in the next build"),
+                RecoverySource.Undelete when c.Key is UndeleteRecord u && u.IsDirectory => await Task.Run(() => RecoverUndeletedTree(c, u, folder, ct), ct),
+                RecoverySource.Undelete when c.Key is UndeleteRecord u => await Task.Run(() => RecoverUndeleted(c, u, folder, ct), ct),
                 _ => Fail(c, $"{c.Source} recovery is not available yet"),
             };
         }
         catch (OperationCanceledException) { throw; }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException)
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException or InvalidDataException)
         {
             result = Fail(c, ex.Message);
         }
         lock (_recovered) _recovered.Add(result);
         AppendManifest(folder, result);
         return result;
+    }
+
+    private RecoveredFile RecoverUndeleted(RecoveryCandidate c, UndeleteRecord u, string folder, CancellationToken ct)
+    {
+        Directory.CreateDirectory(folder);
+        string path = RecycleBinSource.UniquePath(Path.Combine(folder, SafeName(c.Name)), " (recovered)");
+        var (bytes, sha, grade, runs) = UndeleteWriter.Recover(Reader, Bitmap, u, c.Grade, path, ct);
+        return new RecoveredFile(c, path, bytes, sha, grade, null, runs);
+    }
+
+    /// <summary>A deleted folder: recovers every scanned child whose parent reference points at this record (same sequence), recursively.</summary>
+    private RecoveredFile RecoverUndeletedTree(RecoveryCandidate c, UndeleteRecord dir, string folder, CancellationToken ct)
+    {
+        string target = RecycleBinSource.UniquePath(Path.Combine(folder, SafeName(c.Name)), " (recovered)");
+        Directory.CreateDirectory(target);
+        long bytes = 0;
+        var worst = RecoveryGrade.Excellent;
+        int files = 0, failed = 0;
+        foreach (var child in _lastUndelete.Where(x => x.Key is UndeleteRecord r && r.ParentRecordNo == dir.RecordNo && r.ParentSequence == dir.Sequence))
+        {
+            ct.ThrowIfCancellationRequested();
+            var r = (UndeleteRecord)child.Key;
+            RecoveredFile childResult;
+            try { childResult = r.IsDirectory ? RecoverUndeletedTree(child, r, target, ct) : RecoverUndeleted(child, r, target, ct); }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException or InvalidDataException) { childResult = Fail(child, ex.Message); }
+            lock (_recovered) _recovered.Add(childResult);
+            AppendManifest(folder, childResult);
+            if (childResult.Succeeded) { bytes += childResult.Bytes; files++; if (Rank(childResult.FinalGrade) > Rank(worst)) worst = childResult.FinalGrade; }
+            else failed++;
+        }
+        return new RecoveredFile(c, target, bytes, "", worst, failed == 0 ? null : $"{failed} of {files + failed} items failed");
+    }
+
+    private static int Rank(RecoveryGrade g) => g switch
+    {
+        RecoveryGrade.Excellent => 0, RecoveryGrade.Good => 1, RecoveryGrade.Partial => 2, RecoveryGrade.Zeroed => 3, RecoveryGrade.Overwritten => 4, _ => 5,
+    };
+
+    /// <summary>Names come from disk structures, so strip anything the file system would reject.</summary>
+    private static string SafeName(string name)
+    {
+        var invalid = Path.GetInvalidFileNameChars();
+        var cleaned = new string(name.Select(ch => invalid.Contains(ch) ? '_' : ch).ToArray()).Trim();
+        return cleaned.Length == 0 ? "unnamed" : cleaned;
     }
 
     private static RecoveredFile RecoverRecycled(RecoveryCandidate c, RecycleBinItem item, string folder, CancellationToken ct)
@@ -145,6 +231,7 @@ public sealed class RecoverySession : IDisposable
     {
         if (_disposed) return;
         _disposed = true;
+        lock (_lazyGate) { _reader?.Dispose(); _reader = null; _bitmap = null; }
         _manager.ResumeWrites(Drive.Letter);
     }
 }

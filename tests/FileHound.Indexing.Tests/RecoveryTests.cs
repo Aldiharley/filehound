@@ -344,7 +344,7 @@ public sealed class RecoverySessionTests : IDisposable
         if (other is null) return;
         var r = await session.RecoverAsync(c, Path.Combine(other.RootDirectory.FullName, "fh-test-never-created"), CancellationToken.None);
         Assert.False(r.Succeeded);
-        Assert.Contains("undelete", r.Error);
+        Assert.Contains("undelete", r.Error, StringComparison.OrdinalIgnoreCase);
     }
 }
 

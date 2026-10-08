@@ -34,7 +34,7 @@ public static class SyntheticFiles
         ms.Write(payload);
     }
 
-    public static byte[] Png(int width, int height, bool badCrc = false)
+    public static byte[] Png(int width, int height, bool badCrc = false, int idatBytes = 10)
     {
         var ms = new MemoryStream();
         ms.Write([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]);
@@ -43,7 +43,10 @@ public static class SyntheticFiles
         BinaryPrimitives.WriteUInt32BigEndian(ihdr.AsSpan(4), (uint)height);
         ihdr[8] = 8; ihdr[9] = 2;
         Chunk(ms, "IHDR", ihdr, badCrc);
-        Chunk(ms, "IDAT", [0x78, 0x9C, 0x63, 0x60, 0x00, 0x00, 0x00, 0x02, 0x00, 0x01], false);
+        var idat = new byte[Math.Max(10, idatBytes)];
+        new byte[] { 0x78, 0x9C, 0x63, 0x60, 0x00, 0x00, 0x00, 0x02, 0x00, 0x01 }.CopyTo(idat, 0);
+        new Random(idatBytes).NextBytes(idat.AsSpan(10));
+        Chunk(ms, "IDAT", idat, false);
         Chunk(ms, "IEND", [], false);
         return ms.ToArray();
     }

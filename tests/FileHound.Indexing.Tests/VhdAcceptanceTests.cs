@@ -15,14 +15,15 @@ public class VhdAcceptanceTests
         using var vhd = VirtualDisk.Create(Path.Combine(Path.GetTempPath(), $"fh-{Guid.NewGuid():N}.vhd"), out _);
         if (vhd is null) return;
         var root = vhd.Root;
-        var png = FileHound.Core.Tests.Carving.SyntheticFiles.Png(64, 64);
+        // Well past the resident-data threshold (~700 bytes), so the picture lives in clusters, not inside the MFT record.
+        var png = FileHound.Core.Tests.Carving.SyntheticFiles.Png(64, 64, idatBytes: 60_000);
         var filler = new byte[200_000];
         new Random(7).NextBytes(filler);
         WriteThrough(root + "photo.png", png);
         File.Delete(root + "photo.png");
         // Burn through the freed MFT record (NTFS reuses the lowest free one) so only the clusters remain.
         for (int i = 0; i < 40; i++) File.WriteAllBytes(root + $"filler{i}.txt", [1, 2, 3]);
-        Thread.Sleep(3000);
+        vhd.FlushMetadata();
 
         var drive = DriveDiscovery.GetDrives().Single(d => d.Letter == vhd.Letter);
         using var reader = VolumeReader.Open(drive);
@@ -65,15 +66,19 @@ public class VhdAcceptanceTests
         byte[] jpg = new byte[200_000]; rng.NextBytes(jpg); jpg[0] = 0xFF; jpg[1] = 0xD8; jpg[2] = 0xFF;
         // NTFS hands a new file the lowest free MFT record, so the victim is created first: after the deletes, the
         // overwriter takes its record (and most likely its clusters), which is exactly the "record reused" case.
+        // Filler files take the lowest MFT records; deleted with the rest, they are what later files reuse, so the
+        // candidates under test keep their records whatever order NTFS hands them out in.
+        for (int i = 0; i < 32; i++) File.WriteAllBytes(root + $"filler{i}.txt", [1, 2, 3]);
         WriteThrough(root + "victim.bin", big);
         Directory.CreateDirectory(root + "Photos");
         WriteThrough(root + @"Photos\holiday.jpg", jpg);
         WriteThrough(root + "big.bin", big);
         WriteThrough(root + "small.txt", small);
         var expected = new Dictionary<string, string> { ["holiday.jpg"] = Sha(jpg), ["big.bin"] = Sha(big), ["small.txt"] = Sha(small) };
+        for (int i = 0; i < 32; i++) File.Delete(root + $"filler{i}.txt");
         foreach (var n in new[] { @"Photos\holiday.jpg", "big.bin", "small.txt", "victim.bin" }) File.Delete(root + n);
         File.WriteAllBytes(root + "overwriter.bin", new byte[6_000_000]);   // likely lands on victim's clusters
-        Thread.Sleep(3000);                                                  // let the lazy writer flush $MFT and $Bitmap
+        vhd.FlushMetadata();
 
         var drive = DriveDiscovery.GetDrives().Single(d => d.Letter == vhd.Letter);
         using var reader = VolumeReader.Open(drive);

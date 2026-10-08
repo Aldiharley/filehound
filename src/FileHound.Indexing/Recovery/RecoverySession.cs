@@ -19,6 +19,7 @@ public sealed class RecoverySession : IDisposable
     private VolumeReader? _reader;
     private ClusterBitmap? _bitmap;
     private IReadOnlyList<RecoveryCandidate> _lastUndelete = [];
+    private Carver? _carver;
 
     public RecoverySession(IndexManager manager, DriveDescriptor drive)
     {
@@ -71,6 +72,28 @@ public sealed class RecoverySession : IDisposable
         VolumeReadPath.Memory => "Memory",
         _ => null,
     };
+
+    /// <summary>FR-21…FR-25: carves free space. Results are de-duplicated against the last undelete scan (FR-23).</summary>
+    public Task<IReadOnlyList<RecoveryCandidate>> CarveAsync(IReadOnlyCollection<string>? typeFilter, IProgress<CarveProgress>? progress, Action<IReadOnlyList<RecoveryCandidate>>? batch, CancellationToken ct) => Task.Run(() =>
+    {
+        RefreshBitmap();
+        var carver = new Carver(Reader, Bitmap) { TypeFilter = typeFilter };
+        _carver = carver;
+        if (batch is not null) carver.Batch += files => batch(CarveWriter.Deduplicate(files, _lastUndelete).Select(ToCandidate).ToList());
+        try
+        {
+            var found = carver.Run(progress, ct);
+            return (IReadOnlyList<RecoveryCandidate>)CarveWriter.Deduplicate(found, _lastUndelete).Select(ToCandidate).ToList();
+        }
+        finally { _carver = null; }
+    }, ct);
+
+    public bool IsCarvePaused => _carver?.IsPaused ?? false;
+    public void PauseCarve() => _carver?.Pause();
+    public void ResumeCarve() => _carver?.Resume();
+
+    private static RecoveryCandidate ToCandidate(CarvedFile f) =>
+        new(RecoverySource.Carving, f.SuggestedName, null, f.Size, null, null, RecoveryGrade.Excellent, 100, false, f.Info is null ? f.Type.Label : $"{f.Type.Label} · {f.Info}", f);
 
     /// <summary>FR-11…FR-14: scans the MFT for deleted records. Re-reads the bitmap first so grades are current.</summary>
     public Task<IReadOnlyList<RecoveryCandidate>> UndeleteAsync(IProgress<UndeleteProgress>? progress, CancellationToken ct) => Task.Run(() =>
@@ -132,7 +155,7 @@ public sealed class RecoverySession : IDisposable
             return Fail(c, why);
         // Refuse before creating the recovery folder: nothing to put in it.
         if (c.Source is RecoverySource.DeletionLog) return Fail(c, "Use the Undelete tab to bring this file back");
-        if (c.Source is not (RecoverySource.RecycleBin or RecoverySource.Undelete or RecoverySource.ShadowCopy)) return Fail(c, $"{c.Source} recovery is not available yet");
+        if (c.Source is not (RecoverySource.RecycleBin or RecoverySource.Undelete or RecoverySource.ShadowCopy or RecoverySource.Carving)) return Fail(c, $"{c.Source} recovery is not available yet");
         var folder = _recoveryFolder ??= Path.Combine(destinationFolder, $"FileHound Recovery {StartedUtc.ToLocalTime():yyyy-MM-dd HHmm}");
         RecoveredFile result;
         try
@@ -143,6 +166,7 @@ public sealed class RecoverySession : IDisposable
                 RecoverySource.Undelete when c.Key is UndeleteRecord u && u.IsDirectory => await Task.Run(() => RecoverUndeletedTree(c, u, folder, ct), ct),
                 RecoverySource.Undelete when c.Key is UndeleteRecord u => await Task.Run(() => RecoverUndeleted(c, u, folder, ct), ct),
                 RecoverySource.ShadowCopy when c.Key is ShadowVersion v => await Task.Run(() => RecoverShadow(c, v, folder, ct), ct),
+                RecoverySource.Carving when c.Key is CarvedFile f => await Task.Run(() => RecoverCarved(c, f, folder, ct), ct),
                 _ => Fail(c, $"{c.Source} recovery is not available yet"),
             };
         }
@@ -164,6 +188,14 @@ public sealed class RecoverySession : IDisposable
         if (v.IsDirectory) return new RecoveredFile(c, path, DirectorySize(path), "", RecoveryGrade.Excellent, null);
         ct.ThrowIfCancellationRequested();
         return new RecoveredFile(c, path, new FileInfo(path).Length, Sha256Of(path), RecoveryGrade.Excellent, null);
+    }
+
+    private RecoveredFile RecoverCarved(RecoveryCandidate c, CarvedFile f, string folder, CancellationToken ct)
+    {
+        Directory.CreateDirectory(folder);
+        string path = RecycleBinSource.UniquePath(Path.Combine(folder, f.SuggestedName), " (recovered)");
+        var (bytes, sha, runs) = CarveWriter.Recover(Reader, f, path, ct);
+        return new RecoveredFile(c, path, bytes, sha, RecoveryGrade.Excellent, null, runs);
     }
 
     private RecoveredFile RecoverUndeleted(RecoveryCandidate c, UndeleteRecord u, string folder, CancellationToken ct)

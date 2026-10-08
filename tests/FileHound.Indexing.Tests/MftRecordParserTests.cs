@@ -24,6 +24,55 @@ public class MftRecordParserTests
     public void Data_runs_reject_truncated_input() => Assert.Throws<InvalidDataException>(() => DataRuns.Decode([0x21, 0x18]));
 
     [Fact]
+    public void Deleted_record_exposes_sequence_timestamps_sizes_and_flags()
+    {
+        var created = new DateTime(2026, 1, 2, 3, 4, 5, DateTimeKind.Utc);
+        var modified = new DateTime(2026, 2, 3, 4, 5, 6, DateTimeKind.Utc);
+        var rec = new MftRecordBuilder().Sequence(7)
+            .StandardInfo(modified, attributes: 0x20)
+            .FileName(100, "gone.jpg", parentSequence: 9, createdUtc: created, modifiedUtc: modified, realSize: 5000)
+            .NonResidentData(5000, [0x21, 0x02, 0x10, 0x00, 0x00], flags: MftRecord.DataSparse, initializedSize: 4096)
+            .Build();
+        Assert.True(MftRecordParser.ApplyFixups(rec));
+        Assert.True(MftRecordParser.TryParse(rec, out var r));
+        Assert.False(r.InUse);
+        Assert.True(r.IsBaseRecord);
+        Assert.Equal(7, r.Sequence);
+        Assert.Equal(100, r.ParentRecord);
+        Assert.Equal(9, r.ParentSequence);
+        Assert.Equal(modified.Ticks, r.NameModifiedUtcTicks);
+        Assert.Equal(modified.Ticks, r.ModifiedUtcTicks);
+        Assert.Equal(modified.Ticks, r.CreatedUtcTicks); // $STANDARD_INFORMATION wins (the builder writes modified there too)
+        Assert.Equal(5000, r.RealSize);
+        Assert.Equal(5000, r.Size);
+        Assert.Equal(4096, r.InitializedSize);
+        Assert.Equal(8192, r.AllocatedSize);
+        Assert.Equal(MftRecord.DataSparse, r.DataFlags);
+        Assert.False(r.DataIsResident);
+    }
+
+    [Fact]
+    public void Resident_data_bytes_are_exposed()
+    {
+        var rec = new MftRecordBuilder().InUse().FileName(5, "tiny.txt").ResidentData(12).Build();
+        MftRecordParser.ApplyFixups(rec);
+        Assert.True(MftRecordParser.TryParse(rec, out var r));
+        Assert.True(r.DataIsResident);
+        Assert.Equal(12, r.ResidentData.Length);
+        Assert.Equal(12, r.Size);
+    }
+
+    [Fact]
+    public void Created_falls_back_to_file_name_when_standard_info_is_missing()
+    {
+        var created = new DateTime(2025, 5, 5, 5, 5, 5, DateTimeKind.Utc);
+        var rec = new MftRecordBuilder().FileName(5, "x", createdUtc: created).Build();
+        MftRecordParser.ApplyFixups(rec);
+        MftRecordParser.TryParse(rec, out var r);
+        Assert.Equal(created.Ticks, r.CreatedUtcTicks);
+    }
+
+    [Fact]
     public void Fixups_restore_sector_tails()
     {
         var b = new MftRecordBuilder().InUse().StandardInfo(When).FileName(5, "a.txt").Build();

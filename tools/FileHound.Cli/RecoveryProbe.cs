@@ -45,7 +45,7 @@ internal static unsafe partial class RecoveryProbe
             uint bytesPerCluster = vdOk ? *(uint*)(vd + 44) : 4096;
             uint recordSize = vdOk ? *(uint*)(vd + 48) : 1024;
             long mftStartLcn = vdOk ? *(long*)(vd + 64) : 0;
-            long totalClusters = vdOk ? *(long*)(vd + 32) : 0;
+            long totalClusters = vdOk ? *(long*)(vd + 16) : 0; // TotalClusters @16 (TotalReserved is @32)
             Say($"FSCTL_GET_NTFS_VOLUME_DATA ok={vdOk} err={(vdOk ? 0 : Marshal.GetLastPInvokeError())} cluster={bytesPerCluster} record={recordSize} mftLcn={mftStartLcn} totalClusters={totalClusters}");
 
             long input = 16; byte* rec = stackalloc byte[12 + 4096];

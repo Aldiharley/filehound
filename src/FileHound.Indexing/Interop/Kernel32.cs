@@ -10,6 +10,11 @@ internal static unsafe partial class Kernel32
     public const uint FILE_SHARE_WRITE = 0x2;
     public const uint OPEN_EXISTING = 3;
     public const uint FILE_FLAG_BACKUP_SEMANTICS = 0x02000000;
+    public const uint FILE_FLAG_NO_BUFFERING = 0x20000000;
+    public const uint IOCTL_VOLUME_GET_VOLUME_DISK_EXTENTS = 0x00560000;
+    public const uint FSCTL_GET_NTFS_VOLUME_DATA = 0x00090064;
+    public const uint FSCTL_GET_VOLUME_BITMAP = 0x0009006F;
+    public const int ERROR_MORE_DATA = 234;
 
     public const uint FSCTL_QUERY_USN_JOURNAL = 0x000900F4;
     public const uint FSCTL_ENUM_USN_DATA = 0x000900B3;

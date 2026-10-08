@@ -167,4 +167,18 @@ public class ExportTests
         Assert.Equal("sha256", fo.Element(ns + "hashdigest")!.Attribute("type")!.Value);
         Assert.Equal("FileHound", doc.Root.Element(ns + "creator")!.Element(ns + "program")!.Value);
     }
+
+    [Fact]
+    public void Dfxml_lists_byte_runs()
+    {
+        var sw = new StringWriter();
+        var c = new RecoveryCandidate(RecoverySource.Undelete, "f.bin", @"C:\d", 8192, null, null, RecoveryGrade.Excellent, 100, false, null, 0);
+        DfxmlExport.Write(sw, @"\\.\C:", [new RecoveredFile(c, @"E:\r\f.bin", 8192, "abc", RecoveryGrade.Excellent, null, [new ByteRun(0, 8192, 409600)])], DateTime.UtcNow, DateTime.UtcNow);
+        var doc = XDocument.Parse(sw.ToString());
+        var ns = doc.Root!.Name.Namespace;
+        var run = doc.Root.Element(ns + "fileobject")!.Element(ns + "byte_runs")!.Element(ns + "byte_run")!;
+        Assert.Equal("0", run.Attribute("file_offset")!.Value);
+        Assert.Equal("8192", run.Attribute("len")!.Value);
+        Assert.Equal("409600", run.Attribute("img_offset")!.Value);
+    }
 }

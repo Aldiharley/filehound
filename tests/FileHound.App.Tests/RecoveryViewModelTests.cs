@@ -1,5 +1,6 @@
 using FileHound.App.ViewModels.Recovery;
 using FileHound.Core.Recovery;
+using FileHound.Indexing.Recovery;
 
 namespace FileHound.App.Tests;
 
@@ -60,6 +61,81 @@ public class RecoveryItemTests
         item.ApplyOutcome(new RecoveredFile(c, "", 0, "", RecoveryGrade.Excellent, "disk full"));
         Assert.Equal("Failed", item.StatusKey);
         Assert.Contains("disk full", item.Status);
+    }
+}
+
+public class UndeleteTabViewModelTests
+{
+    private static RecoveryCandidate C(string name, RecoveryGrade g, int pct, long size) =>
+        new(RecoverySource.Undelete, name, @"C:\d", size, null, null, g, pct, false, null, new object());
+
+    [Fact]
+    public async Task Scan_fills_items_sorted_by_best_grade_and_reports_intact_estimate()
+    {
+        var vm = new UndeleteTabViewModel((_, _, _) => Task.FromResult<IReadOnlyList<RecoveryCandidate>>(
+            [C("b", RecoveryGrade.Partial, 40, 1000), C("a", RecoveryGrade.Excellent, 100, 3000)]));
+        await vm.LoadAsync(null);
+        Assert.Equal("Scan", vm.ScanButtonText);
+        await vm.ScanCommand.ExecuteAsync(null);
+        Assert.True(vm.HasScanned);
+        Assert.Equal("Rescan", vm.ScanButtonText);
+        Assert.Equal(2, vm.Count);
+        Assert.Equal("a", vm.Items[0].Name);
+        Assert.Equal("", vm.EstimatedIntactText);
+        vm.Items[0].IsSelected = true;
+        vm.Items[1].IsSelected = true;
+        Assert.Equal("Estimated intact: 85%", vm.EstimatedIntactText);   // (3000*100 + 1000*40) / 4000
+        vm.Sort = UndeleteSort.Name;
+        Assert.Equal("a", vm.Items[0].Name);
+        vm.Filter = "b";
+        Assert.Single(vm.Items);
+    }
+
+    [Fact]
+    public async Task Scan_error_is_shown_not_thrown()
+    {
+        var vm = new UndeleteTabViewModel((_, _, _) => throw new NotSupportedException("No readable path to C:"));
+        await vm.ScanCommand.ExecuteAsync(null);
+        Assert.Contains("No readable path", vm.Error);
+        Assert.False(vm.IsScanning);
+        Assert.False(vm.HasScanned);
+    }
+}
+
+public class PreviousVersionsTabViewModelTests
+{
+    [Fact]
+    public async Task Lookup_lists_versions_and_freeze_needs_confirmation()
+    {
+        var snap = new ShadowCopy("{1}", @"\\?\GLOBALROOT\Device\HarddiskVolumeShadowCopy6", new DateTime(2026, 10, 5, 0, 0, 0, DateTimeKind.Utc), "", 'C');
+        bool frozen = false;
+        var vm = new PreviousVersionsTabViewModel(
+            versions: (_, p) => [new ShadowVersion(snap, p, snap.Device + p[2..], 10, DateTime.UtcNow, false)],
+            freeze: _ => { frozen = true; return "{new}"; },
+            snapshots: _ => [snap])
+        { Path = @"C:\d\f.txt" };
+        await vm.LookupCommand.ExecuteAsync(null);
+        var item = Assert.Single(vm.Items);
+        Assert.Equal("Excellent", item.GradeKey);
+        Assert.Equal("f.txt", item.Name);
+        Assert.Equal(@"C:\d", item.Folder);
+        Assert.IsType<ShadowVersion>(item.Candidate.Key);
+
+        vm.ConfirmFreeze = () => false;
+        await vm.FreezeCommand.ExecuteAsync(null);
+        Assert.False(frozen);
+        vm.ConfirmFreeze = () => true;
+        await vm.FreezeCommand.ExecuteAsync(null);
+        Assert.True(frozen);
+        Assert.Contains("1 snapshot", vm.SnapshotsText);
+    }
+
+    [Fact]
+    public async Task Bad_path_is_reported()
+    {
+        var vm = new PreviousVersionsTabViewModel(versions: (_, _) => throw new ArgumentException("The path must be on drive C:.")) { Path = @"D:\x" };
+        await vm.LookupCommand.ExecuteAsync(null);
+        Assert.Contains("must be on drive", vm.Error);
     }
 }
 

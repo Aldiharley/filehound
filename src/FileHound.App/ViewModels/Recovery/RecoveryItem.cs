@@ -19,9 +19,10 @@ public sealed partial class RecoveryItem : ObservableObject
         IsUnknownFolder = candidate.OriginalFolder is null;
         SizeText = candidate.IsDirectory ? "" : candidate.Size < 0 ? "…" : Formatting.Size(candidate.Size);
         WhenText = candidate.DeletedUtc is { } d ? Formatting.Modified(d.Ticks, nowUtc) : candidate.ModifiedUtc is { } m ? Formatting.Modified(m.Ticks, nowUtc) : "";
-        WhenTooltip = candidate.DeletedUtc is { } dd ? "Deleted " + dd.ToLocalTime().ToString("f") : "";
+        WhenTooltip = candidate.DeletedUtc is { } dd ? (candidate.Source == RecoverySource.ShadowCopy ? "Snapshot from " : "Deleted ") + dd.ToLocalTime().ToString("f") : "";
         Detail = candidate.Detail ?? "";
         (GradeKey, GradeText, GradeTooltip) = Describe(candidate);
+        if (candidate.Source is RecoverySource.Undelete && candidate.Detail is { Length: > 0 } detail) GradeTooltip = $"{GradeTooltip} {detail}.";
     }
 
     public RecoveryCandidate Candidate { get; }

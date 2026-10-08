@@ -92,6 +92,14 @@ public static class DfxmlExport
             if (r.Candidate.ModifiedUtc is { } m) x.WriteElementString("mtime", Ns, Iso(m));
             if (r.Candidate.DeletedUtc is { } d) x.WriteElementString("dtime", Ns, Iso(d));
             x.WriteStartElement("byte_runs", Ns);
+            foreach (var run in r.Runs ?? [])
+            {
+                x.WriteStartElement("byte_run", Ns);
+                x.WriteAttributeString("file_offset", run.FileOffset.ToString(CultureInfo.InvariantCulture));
+                x.WriteAttributeString("len", run.Length.ToString(CultureInfo.InvariantCulture));
+                if (run.ImageOffset >= 0) x.WriteAttributeString("img_offset", run.ImageOffset.ToString(CultureInfo.InvariantCulture));
+                x.WriteEndElement();
+            }
             x.WriteEndElement();
             if (r.Sha256Hex.Length > 0)
             {

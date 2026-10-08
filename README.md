@@ -71,14 +71,17 @@ The **Recovery** page brings deleted files back, one drive at a time, from these
 |---|---|---|---|
 | **Recycle Bin** | Every `$Recycle.Bin` on the drive (other accounts' bins too when elevated) | no | back in place (*Restore*) or in a folder on another drive (*Recover*) |
 | **Recently deleted** | A log of deletions FileHound builds from the NTFS change journal, including files that skipped the bin (Shift+Delete, command line, apps). Each entry shows whether its MFT record is still free | yes | on another drive |
-| **Previous versions**, **Undelete**, **Deep scan** | shadow copies, the MFT's deleted records, and a free-space signature scan | yes | coming in the next builds; see [`docs/superpowers/specs/2026-10-08-file-recovery-design.md`](docs/superpowers/specs/2026-10-08-file-recovery-design.md) |
+| **Undelete** | The master file table's deleted records, read raw from the volume (or from the physical disk, or from a shadow copy, when security software blocks volume reads). Each record is graded against the cluster bitmap: *Excellent*, *Good* (header doesn't match the type), *Partially overwritten (N %)*, *Overwritten*, *Zeroed* (SSD TRIM), *Encrypted*. Sparse and LZNT1-compressed files are reassembled | yes | on another drive |
+| **Previous versions** | Windows shadow copies (restore points). Paste a path and every snapshot that still holds it is listed, newest first. *Freeze this drive now* creates a snapshot on demand, after a warning that it writes to the drive | yes | next to the current file as `name (from <date>).ext` (*Restore*) or in any folder (*Save*) |
+| **Deep scan** | a free-space signature scan | yes | coming in the next build; see [`docs/superpowers/specs/2026-10-08-file-recovery-design.md`](docs/superpowers/specs/2026-10-08-file-recovery-design.md) |
 
 Rules that always hold:
 
 - **Read-only.** While the Recovery page is open on a drive, FileHound stops writing to it: no snapshot saves, no deletion-log saves. The drive's own index keeps updating in memory.
 - **Different drive.** Anything recovered (as opposed to restored in place) must go to a folder on another volume, so a recovery can never overwrite the data it is recovering. The page refuses a destination on the source volume.
 - **Honest grades.** Every candidate carries a chip: *Excellent*, *Recoverable (slot intact)*, *Record reused*, *In Recycle Bin*, *Unknown*. Tooltips say what the grade means and why.
-- **Receipts.** Each recovered file is hashed (SHA-256) and listed in `manifest.csv` inside a `FileHound Recovery <date> <time>` folder; the lists export as CSV, and the session as [DFXML](https://github.com/dfxml-working-group/dfxml_schema).
+- **Receipts.** Each recovered file is hashed (SHA-256) and listed in `manifest.csv` inside a `FileHound Recovery <date> <time>` folder; the lists export as CSV, and the session as [DFXML](https://github.com/dfxml-working-group/dfxml_schema) with the byte runs each undeleted file was read from.
+- **Re-checked before copying.** Undelete re-reads the cluster bitmap just before copying a file; clusters reused since the scan downgrade the grade shown in the results instead of being silently copied as if intact.
 
 The deletion log lives in `%LOCALAPPDATA%\FileHound\recovery\<letter>_<serial>.dlog` (last 50,000 deletions per drive) and is backfilled from the journal's history the first time Turbo runs, so deletions from before FileHound was installed show up too, as far back as the journal reaches.
 
@@ -174,9 +177,10 @@ The app also has a QA mode that renders every page to PNG: `FileHound.exe --snap
 
 ```
 FileHound.Core       pure .NET: struct-of-arrays VolumeIndex, query parser, matchers (fzf-style + Myers), SearchEngine, snapshots,
-                     recovery models, Recycle Bin $I parser, deletion-log store, CSV/DFXML exports
+                     recovery models, Recycle Bin $I parser, deletion-log store, LZNT1 decoder, CSV/DFXML exports
 FileHound.Indexing   Win32: drive discovery, MFT scanner, USN updater, parallel walker, FileSystemWatcher, IndexManager,
-                     recovery: deletion log, journal gap oracle, Recycle Bin source, RecoverySession
+                     recovery: deletion log, journal gap oracle, Recycle Bin source, VolumeReader (volume / physical disk /
+                     shadow copy), ClusterBitmap, MftUndeleteSource + UndeleteWriter, ShadowCopySource, RecoverySession
 FileHound.App        WPF + CommunityToolkit.Mvvm: clay theme, Dashboard / Search / Drives / Recovery / Settings, tray, hotkey
 tools/FileHound.Cli  headless scan / search / bench / recovery-probe
 ```
@@ -184,6 +188,14 @@ tools/FileHound.Cli  headless scan / search / bench / recovery-probe
 Design docs live in [`docs/superpowers/specs`](docs/superpowers/specs), the implementation plan in [`docs/superpowers/plans`](docs/superpowers/plans), and background research in [`docs/research`](docs/research).
 
 ## Changelog
+
+### 1.3.0
+
+- **Undelete tab** (Turbo). Scans the master file table for deleted records, rebuilds each file's folder from the live index and other deleted folders (checking record sequence numbers so a reused folder is not trusted), and grades every candidate against the cluster bitmap plus a first-cluster signature check. Recovery reassembles data runs, zero-fills sparse runs, decompresses LZNT1 units, truncates to the real size, restores timestamps and hashes on the way; the bitmap is re-checked right before copying.
+- **Reads the drive three ways.** `VolumeReader` tries the volume handle, then the physical disk at the partition offset, then the newest shadow-copy device, so Undelete works on system drives where security software refuses raw volume reads (the case on the development PC).
+- **Previous versions tab** (Turbo). Lists every shadow copy that still holds a path, newest first, with *Restore* (next to the current file, never overwriting) and *Save to a folder*. *Freeze this drive now* creates a snapshot via `Win32_ShadowCopy` after a warning whose default is Cancel.
+- The header status chip shows undelete progress and jumps back to Recovery when clicked; DFXML exports now carry `byte_run`s; the Recycle Bin and Previous versions tabs gained *Save to a folder…* for copying instead of restoring.
+- Acceptance test: an elevated round trip on a throwaway VHDX (format, write, delete, overwrite, undelete, compare SHA-256).
 
 ### 1.2.0
 

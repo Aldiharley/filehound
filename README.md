@@ -1,3 +1,5 @@
+<p align="center"><img src="docs/banner/readme-banner.png" alt="FileHound: find any file on any drive as you type, bring deleted ones back" width="100%"></p>
+
 # FileHound
 
 **Find any file on any drive as you type. Bring deleted ones back.**
@@ -205,6 +207,8 @@ dotnet run --project tools/FileHound.Cli -c Release -- recovery-probe   # which 
 ```
 
 The app has a QA mode that renders every page and Recovery tab to PNG: `FileHound.exe --snapshot <dir> [--query text] [--drives C] [--data dir]`. The screenshots in this README come from it, taken against a throwaway "Demo" volume so no personal files appear: [`tools/screenshots/demo-shots.ps1`](tools/screenshots/demo-shots.ps1) (run as administrator) creates the VHD, fills it with made-up documents and pictures, deletes some of them three different ways, captures every page, and detaches the volume again.
+
+The banner at the top and the repository's social preview (`docs/banner/`) come from [`tools/assets/banner.ps1`](tools/assets/banner.ps1): the clay scene is generated with the Higgsfield CLI from the mascot reference, and the wordmark, tagline and chips are composited in Pillow by `banner_compose.py` so the text is crisp and exactly on-palette. Design notes: [`docs/superpowers/specs/2026-10-09-github-banner.md`](docs/superpowers/specs/2026-10-09-github-banner.md).
 
 ### Releasing
 

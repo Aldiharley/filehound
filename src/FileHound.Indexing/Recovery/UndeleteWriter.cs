@@ -26,20 +26,29 @@ public static class UndeleteWriter
             if (!record.TryGetRuns(reader.Geometry.TotalClusters, out runList)) throw new InvalidDataException("The record's data runs are damaged.");
             if (!record.HasSupportedCompressionUnit) throw new InvalidDataException("Unsupported compression unit.");
         }
-        try { return Write(reader, bitmap, record, runList, gradeAtScan, destPath, ct); }
-        catch
-        {
-            // A half-written file would be mistaken for a recovery; the grade and error tell the user what happened instead.
-            try { File.Delete(destPath); } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
-            throw;
-        }
+        return Write(reader, bitmap, record, runList, gradeAtScan, destPath, ct);
     }
 
     private static (long Bytes, string Sha256, RecoveryGrade FinalGrade, IReadOnlyList<ByteRun> Runs) Write(
         VolumeReader reader, ClusterBitmap bitmap, UndeleteRecord record, IReadOnlyList<DataRun> runList, RecoveryGrade gradeAtScan, string destPath, CancellationToken ct)
     {
         using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
-        using var output = new FileStream(destPath, FileMode.CreateNew, FileAccess.Write, FileShare.None, 1 << 16);
+        // CreateNew: an existing file is never touched. Only a file this call created is removed on failure.
+        var output = new FileStream(destPath, FileMode.CreateNew, FileAccess.Write, FileShare.None, 1 << 16);
+        try { return Fill(reader, bitmap, record, runList, gradeAtScan, destPath, output, hash, ct); }
+        catch
+        {
+            // A half-written file would be mistaken for a recovery; the error in the results list says what happened instead.
+            output.Dispose();
+            try { File.Delete(destPath); } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+            throw;
+        }
+    }
+
+    private static (long Bytes, string Sha256, RecoveryGrade FinalGrade, IReadOnlyList<ByteRun> Runs) Fill(
+        VolumeReader reader, ClusterBitmap bitmap, UndeleteRecord record, IReadOnlyList<DataRun> runList, RecoveryGrade gradeAtScan, string destPath,
+        FileStream output, IncrementalHash hash, CancellationToken ct)
+    {
         var runs = new List<ByteRun>();
         long written = 0;
         var grade = gradeAtScan;

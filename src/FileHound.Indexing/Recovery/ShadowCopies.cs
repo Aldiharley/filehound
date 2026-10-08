@@ -125,7 +125,8 @@ public static class ShadowCopies
     {
         try
         {
-            var psi = new ProcessStartInfo("vssadmin", args) { UseShellExecute = false, RedirectStandardOutput = true, RedirectStandardError = true, CreateNoWindow = true };
+            // stderr is not redirected: reading stdout to the end with a redirected, unread stderr can deadlock.
+            var psi = new ProcessStartInfo("vssadmin", args) { UseShellExecute = false, RedirectStandardOutput = true, RedirectStandardError = false, CreateNoWindow = true };
             using var p = Process.Start(psi);
             if (p is null) return "";
             string output = p.StandardOutput.ReadToEnd();

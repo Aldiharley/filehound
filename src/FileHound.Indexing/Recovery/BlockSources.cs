@@ -83,9 +83,13 @@ internal sealed unsafe class HandleBlockSource : IBlockSource
     /// </summary>
     public static (HandleBlockSource? Source, string Reason) TryOpenPhysicalDisk(SafeFileHandle control, long probeOffset)
     {
-        byte* ext = stackalloc byte[8 + 24 * 4];
-        if (!Kernel32.DeviceIoControl(control, Kernel32.IOCTL_VOLUME_GET_VOLUME_DISK_EXTENTS, null, 0, ext, 8 + 24 * 4, out _, 0))
-            return (null, $"disk extents: query failed (Win32 error {Marshal.GetLastPInvokeError()})");
+        const int MaxExtents = 16;
+        byte* ext = stackalloc byte[8 + 24 * MaxExtents];
+        if (!Kernel32.DeviceIoControl(control, Kernel32.IOCTL_VOLUME_GET_VOLUME_DISK_EXTENTS, null, 0, ext, 8 + 24 * MaxExtents, out _, 0))
+        {
+            int err = Marshal.GetLastPInvokeError();
+            return (null, err == Kernel32.ERROR_MORE_DATA ? $"disk extents: volume spans more than {MaxExtents} extents" : $"disk extents: query failed (Win32 error {err})");
+        }
         uint count = *(uint*)ext;
         if (count != 1) return (null, $"disk extents: volume spans {count} extents");
         uint disk = *(uint*)(ext + 8);

@@ -41,7 +41,14 @@ public sealed class RecoverySession : IDisposable
     /// <summary>Raw access to the drive, opened on first use (throws <see cref="NotSupportedException"/> when no path reads).</summary>
     public VolumeReader Reader
     {
-        get { lock (_lazyGate) return _reader ??= VolumeReader.Open(Drive); }
+        get
+        {
+            lock (_lazyGate)
+            {
+                ObjectDisposedException.ThrowIf(_disposed, this);
+                return _reader ??= VolumeReader.Open(Drive);
+            }
+        }
     }
 
     /// <summary>The cluster bitmap as of the last scan (or first use).</summary>
@@ -140,8 +147,10 @@ public sealed class RecoverySession : IDisposable
             };
         }
         catch (OperationCanceledException) { throw; }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException or InvalidDataException)
+        catch (Exception ex)
         {
+            // One bad candidate (corrupt record, closed handle, full disk) must not end the batch.
+            IndexManager.Log?.Invoke($"Recovery of {c.OriginalPath} failed: {ex.GetType().Name}: {ex.Message}");
             result = Fail(c, ex.Message);
         }
         lock (_recovered) _recovered.Add(result);
@@ -166,20 +175,22 @@ public sealed class RecoverySession : IDisposable
     }
 
     /// <summary>A deleted folder: recovers every scanned child whose parent reference points at this record (same sequence), recursively.</summary>
-    private RecoveredFile RecoverUndeletedTree(RecoveryCandidate c, UndeleteRecord dir, string folder, CancellationToken ct)
+    private RecoveredFile RecoverUndeletedTree(RecoveryCandidate c, UndeleteRecord dir, string folder, CancellationToken ct, HashSet<long>? visited = null)
     {
+        visited ??= [];
+        if (!visited.Add(dir.RecordNo) || visited.Count > 64) return Fail(c, "folder structure loops back on itself");
         string target = RecycleBinSource.UniquePath(Path.Combine(folder, SafeName(c.Name)), " (recovered)");
         Directory.CreateDirectory(target);
         long bytes = 0;
         var worst = RecoveryGrade.Excellent;
         int files = 0, failed = 0;
-        foreach (var child in _lastUndelete.Where(x => x.Key is UndeleteRecord r && r.ParentRecordNo == dir.RecordNo && r.ParentSequence == dir.Sequence))
+        foreach (var child in MftUndeleteSource.ChildrenOf(_lastUndelete, dir))
         {
             ct.ThrowIfCancellationRequested();
             var r = (UndeleteRecord)child.Key;
             RecoveredFile childResult;
-            try { childResult = r.IsDirectory ? RecoverUndeletedTree(child, r, target, ct) : RecoverUndeleted(child, r, target, ct); }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException or InvalidDataException) { childResult = Fail(child, ex.Message); }
+            try { childResult = r.IsDirectory ? RecoverUndeletedTree(child, r, target, ct, visited) : RecoverUndeleted(child, r, target, ct); }
+            catch (Exception ex) when (ex is not OperationCanceledException) { childResult = Fail(child, ex.Message); }
             lock (_recovered) _recovered.Add(childResult);
             AppendManifest(folder, childResult);
             if (childResult.Succeeded) { bytes += childResult.Bytes; files++; if (Rank(childResult.FinalGrade) > Rank(worst)) worst = childResult.FinalGrade; }

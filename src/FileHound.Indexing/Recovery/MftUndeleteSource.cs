@@ -78,7 +78,7 @@ public sealed class MftUndeleteSource(VolumeReader reader, ClusterBitmap bitmap,
             }
             var (grade, percent, gradeDetail) = Grade(r, ReadFirstCluster(r, firstCluster));
             if (gradeDetail is not null) detail = detail is null ? gradeDetail : $"{gradeDetail}; {detail}";
-            result.Add(new RecoveryCandidate(RecoverySource.Undelete, r.Name, folder, r.IsDirectory ? 0 : r.RealSize,
+            result.Add(new RecoveryCandidate(RecoverySource.Undelete, r.Name, folder, r.IsDirectory ? 0 : DisplaySize(r),
                 r.ModifiedUtcTicks > 0 ? new DateTime(r.ModifiedUtcTicks, DateTimeKind.Utc) : null, deleted,
                 grade, percent, r.IsDirectory, detail, r));
         }
@@ -93,10 +93,23 @@ public sealed class MftUndeleteSource(VolumeReader reader, ClusterBitmap bitmap,
         _deleted[recordNo] = UndeleteRecord.From(recordNo, r);
     }
 
+    /// <summary>The size shown: the record's real size, clamped to what its runs can hold (a corrupt size can't claim terabytes).</summary>
+    private long DisplaySize(UndeleteRecord r)
+    {
+        if (r.DataIsResident) return Math.Min(r.RealSize, r.ResidentData?.Length ?? 0);
+        if (!r.TryGetRuns(reader.Geometry.TotalClusters, out var runs)) return 0;
+        return Math.Min(r.RealSize, UndeleteRecord.Capacity(runs, reader.Geometry.BytesPerCluster));
+    }
+
+    /// <summary>Children of a deleted directory among scanned candidates (same rule the path resolver uses).</summary>
+    public static IEnumerable<RecoveryCandidate> ChildrenOf(IEnumerable<RecoveryCandidate> all, UndeleteRecord dir) =>
+        all.Where(c => c.Key is UndeleteRecord r && dir.IsParentOf(r));
+
     private ReadOnlySpan<byte> ReadFirstCluster(UndeleteRecord r, byte[] buffer)
     {
         if (r.IsDirectory || r.DataIsResident) return default;
-        var run = r.Runs.FirstOrDefault(x => x.Lcn >= 0);
+        if (!r.TryGetRuns(reader.Geometry.TotalClusters, out var runs)) return default;
+        var run = runs.FirstOrDefault(x => x.Lcn >= 0);
         if (run.Clusters == 0 || run.Lcn < 0 || run.Lcn >= reader.Geometry.TotalClusters) return default;
         try { reader.ReadClusters(run.Lcn, 1, buffer); }
         catch (IOException) { return default; }
@@ -123,6 +136,7 @@ public sealed class MftUndeleteSource(VolumeReader reader, ClusterBitmap bitmap,
             finally { liveIndex.Lock.ExitReadLock(); }
         }
         if (folder is null && _deleted.TryGetValue(parentRecord, out var parent) && parent.IsDirectory
+            && parent.ParentRecordNo != parentRecord   // a record claiming to be its own parent
             && (parent.Sequence == parentSequence || parent.Sequence == parentSequence + 1))
         {
             var grand = ResolveFolder(parent.ParentRecordNo, parent.ParentSequence, depth + 1);
@@ -138,17 +152,20 @@ public sealed class MftUndeleteSource(VolumeReader reader, ClusterBitmap bitmap,
         if (r.IsEncrypted) return (RecoveryGrade.Encrypted, 0, "EFS-encrypted");
         if (r.IsDirectory) return (RecoveryGrade.Excellent, 100, null);
         if (r.DataIsResident) return (RecoveryGrade.Excellent, 100, null);
-        var runs = r.Runs;
+        if (!r.TryGetRuns(reader.Geometry.TotalClusters, out var runs)) return (RecoveryGrade.Unknown, 0, "the record's data runs are damaged");
         if (runs.Count == 0) return r.RealSize == 0 ? (RecoveryGrade.Excellent, 100, null) : (RecoveryGrade.Unknown, 0, "no data runs in the record");
+        if (!r.HasSupportedCompressionUnit) return (RecoveryGrade.Unknown, 0, "unsupported compression unit");
         string? detail = r.IsCompressed ? "Compressed (LZNT1)" : null;
         long cluster = reader.Geometry.BytesPerCluster;
+        long capacity = UndeleteRecord.Capacity(runs, cluster);
+        long initialized = Math.Min(r.InitializedSize > 0 ? r.InitializedSize : r.RealSize, capacity);
         // Only clusters that were ever written matter; a compressed file's runs are all meaningful.
-        long needed = r.IsCompressed ? runs.Sum(x => x.Clusters) : ((r.InitializedSize > 0 ? r.InitializedSize : r.RealSize) + cluster - 1) / cluster;
+        long needed = r.IsCompressed ? runs.Sum(x => x.Clusters) : (initialized + cluster - 1) / cluster;
         var (allocated, total) = bitmap.Count(runs, needed);
         if (total == 0) return (RecoveryGrade.Excellent, 100, detail);                 // only sparse runs
         if (allocated == total) return (RecoveryGrade.Overwritten, 0, detail);
         if (allocated > 0) return (RecoveryGrade.Partial, (int)(100 * (total - allocated) / total), detail);
-        if (!firstCluster.IsEmpty && r.InitializedSize > 0 && ContentCheck.IsAllZero(firstCluster[..(int)Math.Min(firstCluster.Length, Math.Max(16, r.InitializedSize))]))
+        if (!firstCluster.IsEmpty && initialized > 0 && ContentCheck.IsAllZero(firstCluster[..(int)Math.Min(firstCluster.Length, Math.Max(16, initialized))]))
             return (RecoveryGrade.Zeroed, 0, detail);
         if (!r.IsCompressed && !firstCluster.IsEmpty && ContentCheck.LooksLike(Path.GetExtension(r.Name), firstCluster) == false)
             return (RecoveryGrade.Good, 100, Join(detail, "header does not match the file type"));

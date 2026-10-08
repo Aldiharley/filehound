@@ -19,6 +19,9 @@ public sealed partial class UndeleteTabViewModel : ObservableObject
     private List<RecoveryItem> _all = [];
     private CancellationTokenSource? _cts;
 
+    /// <summary>The scan in flight, so the session can be closed only after it has let go of the reader.</summary>
+    public Task? ScanTask { get; private set; }
+
     /// <param name="scanner">Runs the scan; the default calls <see cref="RecoverySession.UndeleteAsync"/>.</param>
     public UndeleteTabViewModel(Func<RecoverySession?, IProgress<UndeleteProgress>, CancellationToken, Task<IReadOnlyList<RecoveryCandidate>>>? scanner = null)
     {
@@ -86,7 +89,9 @@ public sealed partial class UndeleteTabViewModel : ObservableObject
         });
         try
         {
-            var found = await _scanner(session, progress, cts.Token);
+            var scan = _scanner(session, progress, cts.Token);
+            ScanTask = scan;
+            var found = await scan;
             if (cts.IsCancellationRequested) return;
             var now = DateTime.UtcNow;
             var items = found.Select(c => new RecoveryItem(c, now)).ToList();
@@ -97,15 +102,16 @@ public sealed partial class UndeleteTabViewModel : ObservableObject
             Apply();
         }
         catch (OperationCanceledException) { }
-        catch (Exception ex) when (ex is NotSupportedException or IOException or UnauthorizedAccessException or InvalidDataException)
+        catch (ObjectDisposedException) { }
+        catch (Exception ex)
         {
             Error = ex.Message;
-            Log.Warn($"Undelete scan failed: {ex.Message}");
+            Log.Warn($"Undelete scan failed: {ex.GetType().Name}: {ex.Message}");
         }
         finally
         {
-            IsScanning = false;
-            ProgressText = "";
+            if (ReferenceEquals(_cts, cts)) { IsScanning = false; ProgressText = ""; }
+            ScanTask = null;
         }
     }
 

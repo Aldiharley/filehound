@@ -22,6 +22,7 @@ public sealed partial class RecoveryViewModel : ObservableObject
     private RecoverySession? _session;
     private DeletionLog? _subscribedLog;
     private bool _reloadQueued;
+    private Task? _batch;
     private readonly Func<IndexManager, DriveDescriptor, RecoverySession> _sessionFactory;
 
     public RecoveryViewModel(IndexManager manager, bool isElevated, Action<string> toast, Action enableTurbo,
@@ -157,9 +158,14 @@ public sealed partial class RecoveryViewModel : ObservableObject
     private void CloseSession()
     {
         if (_subscribedLog is { } log) { log.Changed -= OnLogChanged; _subscribedLog = null; }
-        _session?.Dispose();
+        var session = _session;
         _session = null;
         HasSession = false;
+        if (session is null) return;
+        // The reader may be mid-read on a thread-pool thread (a scan or a batch): let that finish before the handles close.
+        var pending = new[] { Undelete.ScanTask, _batch }.Where(t => t is not null && !t.IsCompleted).ToList();
+        if (pending.Count == 0) { session.Dispose(); return; }
+        _ = Task.WhenAll(pending!).ContinueWith(_ => session.Dispose(), TaskScheduler.Default);
     }
 
     private void UpdateSelection()
@@ -207,6 +213,8 @@ public sealed partial class RecoveryViewModel : ObservableObject
         if (session is null || (!restoreInPlace && destination is null)) return;
         var items = CurrentSelected.ToList();
         if (items.Count == 0) return;
+        var batch = new TaskCompletionSource();
+        _batch = batch.Task;
         IsBusy = true;
         CanRecover = false;
         int done = 0, ok = 0;
@@ -233,11 +241,13 @@ public sealed partial class RecoveryViewModel : ObservableObject
                         if (r.Succeeded) { ok++; bytes += r.Bytes; }
                     }
                 }
-                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException or NotSupportedException or InvalidDataException)
+                catch (Exception ex)
                 {
+                    // One item must not end the batch; the session already swallowed the common cases, so this is the backstop.
                     it.Status = "Failed — " + ex.Message;
                     it.StatusKey = "Failed";
-                    Log.Warn($"Recovery failed for {it.Candidate.OriginalPath}: {ex.Message}");
+                    Log.Warn($"Recovery failed for {it.Candidate.OriginalPath}: {ex.GetType().Name}: {ex.Message}");
+                    if (ex is ObjectDisposedException) break;
                 }
                 done++;
             }
@@ -251,6 +261,7 @@ public sealed partial class RecoveryViewModel : ObservableObject
         {
             IsBusy = false;
             ProgressText = "";
+            batch.SetResult();
             UpdateSelection();
         }
     }

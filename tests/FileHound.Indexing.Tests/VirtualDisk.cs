@@ -78,9 +78,9 @@ internal sealed class VirtualDisk : IDisposable
         File.WriteAllText(scriptPath, script);
         try
         {
-            var psi = new ProcessStartInfo("diskpart.exe", $"/s \"{scriptPath}\"") { UseShellExecute = false, RedirectStandardOutput = true, RedirectStandardError = true, CreateNoWindow = true };
+            var psi = new ProcessStartInfo("diskpart.exe", $"/s \"{scriptPath}\"") { UseShellExecute = false, RedirectStandardOutput = true, RedirectStandardError = false, CreateNoWindow = true };
             using var p = Process.Start(psi)!;
-            string output = p.StandardOutput.ReadToEnd() + p.StandardError.ReadToEnd();
+            string output = p.StandardOutput.ReadToEnd();
             p.WaitForExit(120_000);
             return (p.ExitCode, output);
         }

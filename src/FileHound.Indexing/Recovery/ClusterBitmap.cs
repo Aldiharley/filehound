@@ -27,6 +27,7 @@ public sealed class ClusterBitmap
     public static ClusterBitmap Load(VolumeReader reader)
     {
         long total = reader.Geometry.TotalClusters;
+        if (total <= 0 || total > (1L << 34)) throw new NotSupportedException($"Unsupported volume size ({total} clusters).");
         if (reader.ControlHandle is { } control && TryFsctl(control, total, out var bits)) return new ClusterBitmap(bits, total, "FSCTL");
         var record = reader.ReadRecord(6);
         if (!MftRecordParser.TryParse(record, out var r) || !r.InUse) throw new InvalidDataException("$Bitmap record is unreadable.");
@@ -73,7 +74,8 @@ public sealed class ClusterBitmap
                 if (byteIndex < 0 || byteIndex > bits.Length) return false;
                 int copy = (int)Math.Min(gotBytes, bits.Length - byteIndex);
                 new ReadOnlySpan<byte>(output + 16, copy).CopyTo(bits.AsSpan((int)byteIndex));
-                if (ok || copy == 0) break;
+                if (ok) break;
+                if (copy == 0) return false; // "more data" but nothing came back: don't pass off a half-filled bitmap as free space
                 startLcn = gotStart + (long)gotBytes * 8;
             }
             return true;
@@ -101,8 +103,11 @@ public sealed class ClusterBitmap
             long take = Math.Min(run.Clusters, clustersNeeded - seen);
             seen += take;
             if (run.Lcn < 0) continue;
-            for (long i = 0; i < take; i++) if (IsAllocated(run.Lcn + i)) allocated++;
             total += take;
+            // Clusters outside the volume count as allocated without walking them (a corrupt run can claim billions).
+            long inside = run.Lcn >= TotalClusters ? 0 : Math.Min(take, TotalClusters - run.Lcn);
+            allocated += take - inside;
+            for (long i = 0; i < inside; i++) if (IsAllocated(run.Lcn + i)) allocated++;
         }
         return (allocated, total);
     }

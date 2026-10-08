@@ -16,6 +16,7 @@ public static class ShadowCopySource
         if (full.Length < 3 || char.ToUpperInvariant(full[0]) != char.ToUpperInvariant(letter) || full[1] != ':' || full[2] != '\\')
             throw new ArgumentException($"The path must be on drive {char.ToUpperInvariant(letter)}:.", nameof(path));
         string relative = full[3..].TrimEnd('\\');
+        if (relative.Length == 0) throw new ArgumentException("Pick a file or folder on the drive, not the drive itself.", nameof(path));
         var result = new List<ShadowVersion>();
         foreach (var snapshot in ShadowCopies.List(letter))
         {

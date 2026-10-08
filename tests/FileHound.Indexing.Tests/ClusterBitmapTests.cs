@@ -26,4 +26,15 @@ public class ClusterBitmapTests
         Assert.Equal((1L, 2L), bm.Count(runs, clustersNeeded: 2));
         Assert.Equal((0L, 0L), bm.Count(runs, clustersNeeded: 0));
     }
+
+    [Fact]
+    public void Clusters_outside_the_volume_count_as_allocated_without_walking_them()
+    {
+        var vol = new SyntheticVolume(clusters: 256);
+        using var r = vol.OpenReader();
+        var bm = ClusterBitmap.Load(r);
+        Assert.Equal((100L, 100L), bm.Count([new DataRun(0, 500, 100)], clustersNeeded: 100));
+        Assert.Equal((1L << 40, 1L << 40), bm.Count([new DataRun(0, 300, 1L << 40)], clustersNeeded: 1L << 40));
+        Assert.Equal((5L, 10L), bm.Count([new DataRun(0, 251, 10)], clustersNeeded: 10)); // 251..255 free, 256..260 outside
+    }
 }

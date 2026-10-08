@@ -19,6 +19,25 @@ public static class UndeleteWriter
     {
         if (record.IsEncrypted) throw new NotSupportedException("EFS-encrypted files cannot be recovered.");
         if (record.IsDirectory) throw new NotSupportedException("Directories are recovered through their children.");
+        // Validate before anything touches the destination, so a refused record leaves no empty file behind.
+        IReadOnlyList<DataRun> runList = [];
+        if (!record.DataIsResident)
+        {
+            if (!record.TryGetRuns(reader.Geometry.TotalClusters, out runList)) throw new InvalidDataException("The record's data runs are damaged.");
+            if (!record.HasSupportedCompressionUnit) throw new InvalidDataException("Unsupported compression unit.");
+        }
+        try { return Write(reader, bitmap, record, runList, gradeAtScan, destPath, ct); }
+        catch
+        {
+            // A half-written file would be mistaken for a recovery; the grade and error tell the user what happened instead.
+            try { File.Delete(destPath); } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+            throw;
+        }
+    }
+
+    private static (long Bytes, string Sha256, RecoveryGrade FinalGrade, IReadOnlyList<ByteRun> Runs) Write(
+        VolumeReader reader, ClusterBitmap bitmap, UndeleteRecord record, IReadOnlyList<DataRun> runList, RecoveryGrade gradeAtScan, string destPath, CancellationToken ct)
+    {
         using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
         using var output = new FileStream(destPath, FileMode.CreateNew, FileAccess.Write, FileShare.None, 1 << 16);
         var runs = new List<ByteRun>();
@@ -36,17 +55,19 @@ public static class UndeleteWriter
         else
         {
             long cluster = reader.Geometry.BytesPerCluster;
-            long realSize = record.RealSize;
+            // Sizes come from disk: never trust them past what the runs can hold.
+            long capacity = UndeleteRecord.Capacity(runList, cluster);
+            long realSize = Math.Min(record.RealSize, capacity);
             long initialized = record.InitializedSize > 0 ? Math.Min(record.InitializedSize, realSize) : realSize;
-            long needed = record.IsCompressed ? record.Runs.Sum(r => r.Clusters) : (initialized + cluster - 1) / cluster;
-            var (allocatedNow, total) = bitmap.Count(record.Runs, needed);
+            long needed = record.IsCompressed ? runList.Sum(r => r.Clusters) : (initialized + cluster - 1) / cluster;
+            var (allocatedNow, total) = bitmap.Count(runList, needed);
             if (total > 0 && allocatedNow > 0)
             {
                 var worse = allocatedNow == total ? RecoveryGrade.Overwritten : RecoveryGrade.Partial;
                 if (Rank(worse) > Rank(grade)) grade = worse;
             }
-            if (record.IsCompressed) written = WriteCompressed(reader, record, initialized, output, hash, runs, ct);
-            else written = WritePlain(reader, record, initialized, output, hash, runs, ct);
+            if (record.IsCompressed) written = WriteCompressed(reader, runList, record.ClustersPerUnit, initialized, output, hash, runs, ct);
+            else written = WritePlain(reader, runList, initialized, output, hash, runs, ct);
             // Bytes past the initialized size read as zeros on a live volume; reproduce that up to the real size.
             if (written < realSize) WriteZeros(output, hash, realSize - written);
             written = realSize;
@@ -67,12 +88,12 @@ public static class UndeleteWriter
         RecoveryGrade.Excellent => 0, RecoveryGrade.Good => 1, RecoveryGrade.Partial => 2, RecoveryGrade.Zeroed => 3, RecoveryGrade.Overwritten => 4, _ => 5,
     };
 
-    private static long WritePlain(VolumeReader reader, UndeleteRecord record, long limit, Stream output, IncrementalHash hash, List<ByteRun> runs, CancellationToken ct)
+    private static long WritePlain(VolumeReader reader, IReadOnlyList<DataRun> dataRuns, long limit, Stream output, IncrementalHash hash, List<ByteRun> runs, CancellationToken ct)
     {
         long cluster = reader.Geometry.BytesPerCluster;
         long written = 0;
         var buffer = new byte[Math.Min(MaxClustersPerRead, 1024) * cluster];
-        foreach (var run in record.Runs)
+        foreach (var run in dataRuns)
         {
             if (written >= limit) break;
             long runBytes = Math.Min(run.Clusters * cluster, limit - written);
@@ -82,7 +103,6 @@ public static class UndeleteWriter
                 written += runBytes;
                 continue;
             }
-            if (run.Lcn + run.Clusters > reader.Geometry.TotalClusters) throw new InvalidDataException($"Data run at cluster {run.Lcn} runs past the end of the volume.");
             runs.Add(new ByteRun(written, runBytes, run.Lcn * cluster));
             long done = 0;
             while (done < runBytes)
@@ -105,12 +125,11 @@ public static class UndeleteWriter
     /// runs end in a sparse tail holds an LZNT1 stream in its allocated clusters, a fully allocated unit is stored raw,
     /// and an entirely sparse unit is zeros.
     /// </summary>
-    private static long WriteCompressed(VolumeReader reader, UndeleteRecord record, long limit, Stream output, IncrementalHash hash, List<ByteRun> runs, CancellationToken ct)
+    private static long WriteCompressed(VolumeReader reader, IReadOnlyList<DataRun> dataRuns, int unitClusters, long limit, Stream output, IncrementalHash hash, List<ByteRun> runs, CancellationToken ct)
     {
         long cluster = reader.Geometry.BytesPerCluster;
-        int unitClusters = record.ClustersPerUnit;
         long unitBytes = unitClusters * cluster;
-        long totalVcns = record.Runs.Sum(r => r.Clusters);
+        long totalVcns = dataRuns.Sum(r => r.Clusters);
         var packed = new byte[unitBytes];
         var unpacked = new byte[unitBytes];
         long written = 0;
@@ -122,10 +141,9 @@ public static class UndeleteWriter
             bool anySparse = false;
             for (long v = unitVcn; v < unitVcn + unitClusters && v < totalVcns; v++)
             {
-                long lcn = LcnOf(record.Runs, v);
+                long lcn = LcnOf(dataRuns, v);
                 if (lcn < 0) { anySparse = true; continue; }
                 if (anySparse) throw new InvalidDataException("Compression unit has data after its sparse tail.");
-                if (lcn >= reader.Geometry.TotalClusters) throw new InvalidDataException($"Data run at cluster {lcn} runs past the end of the volume.");
                 reader.ReadClusters(lcn, 1, packed.AsSpan(stored * (int)cluster));
                 stored++;
             }
@@ -138,7 +156,7 @@ public static class UndeleteWriter
             {
                 output.Write(packed, 0, (int)take);
                 hash.AppendData(packed, 0, (int)take);
-                runs.Add(new ByteRun(written, take, LcnOf(record.Runs, unitVcn) * cluster));
+                runs.Add(new ByteRun(written, take, LcnOf(dataRuns, unitVcn) * cluster));
             }
             else
             {
@@ -146,7 +164,7 @@ public static class UndeleteWriter
                 Lznt1.Decompress(packed.AsSpan(0, stored * (int)cluster), unpacked);
                 output.Write(unpacked, 0, (int)take);
                 hash.AppendData(unpacked, 0, (int)take);
-                runs.Add(new ByteRun(written, take, LcnOf(record.Runs, unitVcn) * cluster));
+                runs.Add(new ByteRun(written, take, LcnOf(dataRuns, unitVcn) * cluster));
             }
             written += take;
         }

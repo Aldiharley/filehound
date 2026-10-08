@@ -30,8 +30,37 @@ public sealed record UndeleteRecord(
     public bool IsCompressed => (DataFlags & MftRecord.DataCompressed) != 0;
     public bool IsEncrypted => (DataFlags & MftRecord.DataEncrypted) != 0;
     public bool IsSparse => (DataFlags & MftRecord.DataSparse) != 0;
-    /// <summary>Clusters per compression unit (16 when the record says 0 but the file is compressed).</summary>
-    public int ClustersPerUnit => CompressionUnit == 0 ? 16 : 1 << CompressionUnit;
+    /// <summary>NTFS only ever uses 16-cluster units for LZNT1 (unit exponent 4, or 0 on some records).</summary>
+    public bool HasSupportedCompressionUnit => !IsCompressed || CompressionUnit is 0 or 4;
+    /// <summary>Clusters per compression unit.</summary>
+    public int ClustersPerUnit => 16;
+
+    /// <summary>
+    /// The runs, checked against the volume: every run must lie inside it and the VCNs must not exceed its size, so a
+    /// corrupt record cannot make the grade or the copy loop over absurd lengths. False leaves <paramref name="runs"/> empty.
+    /// </summary>
+    public bool TryGetRuns(long totalClusters, out IReadOnlyList<DataRun> runs)
+    {
+        runs = Runs;
+        long vcns = 0;
+        foreach (var r in runs)
+        {
+            if (r.Clusters <= 0 || r.Clusters > totalClusters || (r.Lcn >= 0 && r.Lcn > totalClusters - r.Clusters) || vcns > totalClusters - r.Clusters)
+            {
+                runs = [];
+                return false;
+            }
+            vcns += r.Clusters;
+        }
+        return true;
+    }
+
+    /// <summary>Bytes the runs can actually hold; sizes from the record are clamped to this.</summary>
+    public static long Capacity(IReadOnlyList<DataRun> runs, long bytesPerCluster) => runs.Sum(r => r.Clusters) * bytesPerCluster;
+
+    /// <summary>Whether <paramref name="child"/>'s parent reference points at this (deleted) directory record. NTFS bumps a record's sequence when it is freed, so the reference may be one behind.</summary>
+    public bool IsParentOf(UndeleteRecord child) =>
+        IsDirectory && child.ParentRecordNo == RecordNo && child.RecordNo != RecordNo && (Sequence == child.ParentSequence || Sequence == child.ParentSequence + 1);
 
     public static UndeleteRecord From(long recordNo, in MftRecord r) => new(
         recordNo, r.Sequence, r.ParentRecord, r.ParentSequence, r.Name.ToString(), r.IsDirectory,

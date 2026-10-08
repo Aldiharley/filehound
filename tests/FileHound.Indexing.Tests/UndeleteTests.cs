@@ -146,6 +146,55 @@ public class UndeleteTests
     }
 
     [Fact]
+    public void Hostile_run_lengths_grade_unknown_and_show_no_size()
+    {
+        var (vol, index) = Setup();
+        byte[] runs = [0x31, 0xFF, 0xFF, 0xFF, 0x10, 0x00, 0x00, 0x00]; // 16,777,215 clusters at LCN 16 on a 512-cluster volume
+        vol.SetRecord(90, new MftRecordBuilder().FileName(100, "huge.bin", parentSequence: 2, realSize: 1L << 50)
+            .NonResidentData(1L << 50, runs).Build());
+        var c = Scan(vol, index).Single();
+        Assert.Equal(RecoveryGrade.Unknown, c.Grade);
+        Assert.Contains("damaged", c.Detail);
+        Assert.Equal(0, c.Size);
+    }
+
+    [Fact]
+    public void Unsupported_compression_unit_grades_unknown()
+    {
+        var (vol, index) = Setup();
+        vol.SetAllocated(340, false);
+        vol.SetRecord(91, new MftRecordBuilder().FileName(100, "odd.bin", parentSequence: 2, realSize: 10)
+            .NonResidentData(10, SyntheticVolume.Runs((340, 1)), flags: MftRecord.DataCompressed, compressionUnit: 31).Build());
+        var c = Scan(vol, index).Single();
+        Assert.Equal(RecoveryGrade.Unknown, c.Grade);
+        Assert.Contains("compression unit", c.Detail);
+    }
+
+    [Fact]
+    public void Self_parent_record_does_not_loop()
+    {
+        var (vol, index) = Setup();
+        vol.SetRecord(80, new MftRecordBuilder().Sequence(1).Directory().FileName(80, "Loop", parentSequence: 1).Build());
+        vol.SetRecord(81, new MftRecordBuilder().FileName(80, "inside.txt", parentSequence: 1).ResidentData(3).Build());
+        var cs = Scan(vol, index);
+        Assert.Null(cs.Single(c => c.Name == "inside.txt").OriginalFolder);
+        Assert.Null(cs.Single(c => c.Name == "Loop").OriginalFolder);
+    }
+
+    [Fact]
+    public void Children_of_a_deleted_folder_use_the_bumped_sequence_rule()
+    {
+        static RecoveryCandidate C(UndeleteRecord r) => new(RecoverySource.Undelete, r.Name, null, 0, null, null, RecoveryGrade.Excellent, 100, r.IsDirectory, null, r);
+        var dir = new UndeleteRecord(50, 3, 100, 2, "Old", true, 0, 0, 0, 0, 0, false, null, null, 0, 0);
+        var exact = new UndeleteRecord(51, 1, 50, 3, "a.txt", false, 1, 1, 0, 0, 0, true, [1], null, 0, 0);
+        var bumped = new UndeleteRecord(52, 1, 50, 2, "b.txt", false, 1, 1, 0, 0, 0, true, [1], null, 0, 0);
+        var stale = new UndeleteRecord(53, 1, 50, 9, "c.txt", false, 1, 1, 0, 0, 0, true, [1], null, 0, 0);
+        var self = new UndeleteRecord(50, 3, 50, 3, "Old", true, 0, 0, 0, 0, 0, false, null, null, 0, 0);
+        var children = MftUndeleteSource.ChildrenOf([C(exact), C(bumped), C(stale), C(self)], dir).Select(c => c.Name).ToList();
+        Assert.Equal(["a.txt", "b.txt"], children);
+    }
+
+    [Fact]
     public void Progress_is_reported()
     {
         var (vol, index) = Setup();

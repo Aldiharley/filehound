@@ -114,6 +114,31 @@ public sealed class UndeleteWriterTests : IDisposable
     }
 
     [Fact]
+    public void Huge_real_size_is_clamped_to_what_the_runs_hold()
+    {
+        var vol = new SyntheticVolume(clusters: 256);
+        var data = new byte[4096]; Array.Fill(data, (byte)3); vol.WriteCluster(120, data); vol.SetAllocated(120, false);
+        byte[] runs = [0x21, 0x01, 0x78, 0x00, 0x00];
+        var rec = new UndeleteRecord(37, 1, 5, 1, "liar.bin", false, 1L << 50, 1L << 50, 4096, 0, 0, false, null, runs, 0, 0);
+        using var r = vol.OpenReader();
+        var path = Path.Combine(_dest, "liar.bin");
+        var (bytes, _, _, _) = UndeleteWriter.Recover(r, ClusterBitmap.Load(r), rec, RecoveryGrade.Excellent, path, CancellationToken.None);
+        Assert.Equal(4096, bytes);
+        Assert.Equal(4096, new FileInfo(path).Length);
+    }
+
+    [Fact]
+    public void Unsupported_compression_unit_is_rejected()
+    {
+        var vol = new SyntheticVolume(clusters: 256);
+        byte[] runs = [0x21, 0x01, 0x78, 0x00, 0x00];
+        var rec = new UndeleteRecord(38, 1, 5, 1, "odd.bin", false, 10, 10, 4096, MftRecord.DataCompressed, 31, false, null, runs, 0, 0);
+        using var r = vol.OpenReader();
+        Assert.Throws<InvalidDataException>(() => UndeleteWriter.Recover(r, ClusterBitmap.Load(r), rec, RecoveryGrade.Excellent, Path.Combine(_dest, "odd.bin"), CancellationToken.None));
+        Assert.False(File.Exists(Path.Combine(_dest, "odd.bin")));
+    }
+
+    [Fact]
     public void Run_past_the_volume_end_is_rejected()
     {
         var vol = new SyntheticVolume(clusters: 256);

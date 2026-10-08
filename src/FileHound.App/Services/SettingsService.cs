@@ -18,6 +18,8 @@ public sealed class AppSettings
     public bool StartMinimized { get; set; }
     public bool CloseToTray { get; set; } = true;
     public bool TrayHintShown { get; set; }
+    /// <summary>FR-30: the Deep scan explanation was shown and accepted once.</summary>
+    public bool DeepScanConsented { get; set; }
     public List<string> ExcludedPaths { get; set; } = [];
     public List<string> RecentSearches { get; set; } = [];
 

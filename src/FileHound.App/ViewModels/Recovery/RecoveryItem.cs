@@ -48,6 +48,25 @@ public sealed partial class RecoveryItem : ObservableObject
 
     public string Sha256Short => Sha256 is { Length: > 12 } s ? s[..12] + "…" : Sha256 ?? "";
 
+    // ---- carved files (Deep scan rows)
+    /// <summary>"JPEG image" etc. for carved rows; empty otherwise.</summary>
+    public string TypeLabel => Candidate.Key is FileHound.Indexing.Recovery.CarvedFile f ? f.Type.Label : "";
+    /// <summary>"block 1,204,332" for carved rows.</summary>
+    public string LocationText => Candidate.Key is FileHound.Indexing.Recovery.CarvedFile f ? $"block {f.StartLcn:N0}" : "";
+    public System.Windows.Media.Brush? TypeBrush { get; set; }
+    /// <summary>Set by the Deep scan tab; decodes a small bitmap on first access.</summary>
+    public Func<ImageSource?>? ThumbnailLoader { get; set; }
+    private ImageSource? _thumbnail;
+    private bool _thumbnailLoaded;
+    public ImageSource? Thumbnail
+    {
+        get
+        {
+            if (!_thumbnailLoaded) { _thumbnail = ThumbnailLoader?.Invoke(); _thumbnailLoaded = true; }
+            return _thumbnail;
+        }
+    }
+
     public ImageSource? Icon
     {
         get

@@ -43,6 +43,10 @@ public static class SnapshotMode
                 await Task.Delay(800);
                 await window.Dispatcher.InvokeAsync(() => { }, DispatcherPriority.ApplicationIdle);
                 Save(window, Path.Combine(outDir, "recovery-versions.png"));
+                vm.Recovery.CurrentTab = ViewModels.Recovery.RecoveryTab.DeepScan;
+                await Task.Delay(800);
+                await window.Dispatcher.InvokeAsync(() => { }, DispatcherPriority.ApplicationIdle);
+                Save(window, Path.Combine(outDir, "recovery-deepscan.png"));
                 vm.Recovery.CurrentTab = ViewModels.Recovery.RecoveryTab.RecycleBin;
             }
         }

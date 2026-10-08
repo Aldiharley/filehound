@@ -11,7 +11,7 @@ using Microsoft.Win32;
 
 namespace FileHound.App.ViewModels.Recovery;
 
-public enum RecoveryTab { RecycleBin, Deleted, Undelete, PreviousVersions }
+public enum RecoveryTab { RecycleBin, Deleted, Undelete, PreviousVersions, DeepScan }
 
 /// <summary>The Recovery page: a drive, a source tab, a selection, a destination, and one Recover/Restore action.</summary>
 public sealed partial class RecoveryViewModel : ObservableObject
@@ -26,7 +26,8 @@ public sealed partial class RecoveryViewModel : ObservableObject
     private readonly Func<IndexManager, DriveDescriptor, RecoverySession> _sessionFactory;
 
     public RecoveryViewModel(IndexManager manager, bool isElevated, Action<string> toast, Action enableTurbo,
-        DeletedTabViewModel? deletedTab = null, Func<IndexManager, DriveDescriptor, RecoverySession>? sessionFactory = null)
+        DeletedTabViewModel? deletedTab = null, Func<IndexManager, DriveDescriptor, RecoverySession>? sessionFactory = null,
+        Func<bool>? deepScanConsented = null, Action? markDeepScanConsented = null)
     {
         _manager = manager;
         IsElevated = isElevated;
@@ -37,6 +38,12 @@ public sealed partial class RecoveryViewModel : ObservableObject
         Deleted = deletedTab ?? new DeletedTabViewModel();
         Undelete = new UndeleteTabViewModel();
         Versions = new PreviousVersionsTabViewModel();
+        DeepScan = new DeepScanTabViewModel(deepScanConsented ?? (() => false), markDeepScanConsented ?? (() => { }));
+        DeepScan.SelectionChanged += (_, _) => UpdateSelection();
+        DeepScan.PropertyChanged += (_, e) =>
+        {
+            if (e.PropertyName is nameof(DeepScanTabViewModel.IsScanning) or nameof(DeepScanTabViewModel.Progress)) ScanStateChanged?.Invoke(this, EventArgs.Empty);
+        };
         RecycleBin.SelectionChanged += (_, _) => UpdateSelection();
         Deleted.SelectionChanged += (_, _) => UpdateSelection();
         Undelete.SelectionChanged += (_, _) => UpdateSelection();
@@ -54,11 +61,13 @@ public sealed partial class RecoveryViewModel : ObservableObject
     public DeletedTabViewModel Deleted { get; }
     public UndeleteTabViewModel Undelete { get; }
     public PreviousVersionsTabViewModel Versions { get; }
+    public DeepScanTabViewModel DeepScan { get; }
 
     /// <summary>Raised when the undelete scan starts, progresses or ends (the header status chip follows it).</summary>
     public event EventHandler? ScanStateChanged;
-    public bool IsScanning => Undelete.IsScanning;
-    public double ScanProgress => Undelete.Progress;
+    public bool IsScanning => Undelete.IsScanning || DeepScan.IsScanning;
+    public double ScanProgress => DeepScan.IsScanning ? DeepScan.Progress : Undelete.Progress;
+    public string ScanLabel => DeepScan.IsScanning ? "Scanning free space…" : "Scanning for deleted files…";
     public ObservableCollection<DriveItem> Drives { get; } = [];
     public IReadOnlyList<RecoveredFile> Recovered => _session?.Recovered ?? [];
 
@@ -86,6 +95,7 @@ public sealed partial class RecoveryViewModel : ObservableObject
         RecoveryTab.RecycleBin => RecycleBin.Selected,
         RecoveryTab.Deleted => Deleted.Selected,
         RecoveryTab.Undelete => Undelete.Selected,
+        RecoveryTab.DeepScan => DeepScan.Selected,
         _ => Versions.Selected,
     };
 
@@ -94,6 +104,7 @@ public sealed partial class RecoveryViewModel : ObservableObject
         RecoveryTab.RecycleBin => RecycleBin.Items,
         RecoveryTab.Deleted => Deleted.Items,
         RecoveryTab.Undelete => Undelete.Items,
+        RecoveryTab.DeepScan => DeepScan.Items,
         _ => Versions.Items,
     };
 
@@ -139,7 +150,7 @@ public sealed partial class RecoveryViewModel : ObservableObject
             _subscribedLog = log;
             log.Changed += OnLogChanged;
         }
-        await Task.WhenAll(RecycleBin.LoadAsync(session), Deleted.LoadAsync(session), Undelete.LoadAsync(session), Versions.LoadAsync(session));
+        await Task.WhenAll(RecycleBin.LoadAsync(session), Deleted.LoadAsync(session), Undelete.LoadAsync(session), Versions.LoadAsync(session), DeepScan.LoadAsync(session));
         UpdateSelection();
     }
 
@@ -163,6 +174,7 @@ public sealed partial class RecoveryViewModel : ObservableObject
         HasSession = false;
         if (session is null) return;
         // The reader may be mid-read on a thread-pool thread (a scan or a batch): let that finish before the handles close.
+        DeepScan.Cancel();
         var pending = new[] { Undelete.ScanTask, _batch }.Where(t => t is not null && !t.IsCompleted).ToList();
         if (pending.Count == 0) { session.Dispose(); return; }
         _ = Task.WhenAll(pending!).ContinueWith(_ => session.Dispose(), TaskScheduler.Default);
@@ -309,6 +321,7 @@ public sealed partial class RecoveryViewModel : ObservableObject
     {
         Deleted.Cancel();
         Undelete.Cancel();
+        DeepScan.Cancel();
         CloseSession();
     }
 }

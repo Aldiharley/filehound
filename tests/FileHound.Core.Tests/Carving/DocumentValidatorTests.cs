@@ -8,9 +8,9 @@ namespace FileHound.Core.Tests.Carving;
 public class DocumentValidatorTests
 {
     // ---- builders -------------------------------------------------------------------------------------------------
-    internal static byte[] Pdf() => Encoding.ASCII.GetBytes("%PDF-1.7\n1 0 obj << /Type /Catalog >> endobj\n2 0 obj << /Type /Pages /Count 3 >> endobj\nxref\ntrailer\n%%EOF\n3 0 obj << >> endobj\n%%EOF\r\n");
+    public static byte[] Pdf() => Encoding.ASCII.GetBytes("%PDF-1.7\n1 0 obj << /Type /Catalog >> endobj\n2 0 obj << /Type /Pages /Count 3 >> endobj\nxref\ntrailer\n%%EOF\n3 0 obj << >> endobj\n%%EOF\r\n");
 
-    internal static byte[] Zip(params (string Name, string Content)[] entries)
+    public static byte[] Zip(params (string Name, string Content)[] entries)
     {
         using var ms = new MemoryStream();
         using (var zip = new ZipArchive(ms, ZipArchiveMode.Create, leaveOpen: true))
@@ -24,7 +24,7 @@ public class DocumentValidatorTests
         return ms.ToArray();
     }
 
-    internal static byte[] SevenZip(int payload)
+    public static byte[] SevenZip(int payload)
     {
         var b = new byte[32 + payload + 20];
         b[0] = 0x37; b[1] = 0x7A; b[2] = 0xBC; b[3] = 0xAF; b[4] = 0x27; b[5] = 0x1C; b[6] = 0; b[7] = 4;
@@ -33,7 +33,7 @@ public class DocumentValidatorTests
         return b;
     }
 
-    internal static byte[] Rar4()
+    public static byte[] Rar4()
     {
         var ms = new MemoryStream();
         ms.Write([0x52, 0x61, 0x72, 0x21, 0x1A, 0x07, 0x00]);
@@ -43,7 +43,7 @@ public class DocumentValidatorTests
         return ms.ToArray();
     }
 
-    internal static byte[] Rar5()
+    public static byte[] Rar5()
     {
         var ms = new MemoryStream();
         ms.Write([0x52, 0x61, 0x72, 0x21, 0x1A, 0x07, 0x01, 0x00]);
@@ -53,14 +53,14 @@ public class DocumentValidatorTests
         return ms.ToArray();
     }
 
-    internal static byte[] Gzip(byte[] content)
+    public static byte[] Gzip(byte[] content)
     {
         using var ms = new MemoryStream();
         using (var gz = new GZipStream(ms, CompressionLevel.Optimal, leaveOpen: true)) gz.Write(content);
         return ms.ToArray();
     }
 
-    internal static byte[] Sqlite(int pageSize, int pages)
+    public static byte[] Sqlite(int pageSize, int pages)
     {
         var b = new byte[pageSize * pages];
         "SQLite format 3\0"u8.CopyTo(b);
@@ -69,7 +69,7 @@ public class DocumentValidatorTests
         return b;
     }
 
-    internal static byte[] Pe(bool dll)
+    public static byte[] Pe(bool dll)
     {
         const int peOffset = 0x80, sections = 2, optSize = 240;
         int table = peOffset + 24 + optSize;
@@ -92,7 +92,7 @@ public class DocumentValidatorTests
         return b;
     }
 
-    internal static byte[] Ole2()
+    public static byte[] Ole2()
     {
         // 512-byte sectors; FAT in sector 0; sector 1 = directory (holds the "WordDocument" name); sector 2 free.
         var b = new byte[512 * 4];
@@ -110,9 +110,9 @@ public class DocumentValidatorTests
         return b[..(512 + 2 * 512)];
     }
 
-    internal static byte[] Rtf() => Encoding.ASCII.GetBytes(@"{\rtf1\ansi{\fonttbl{\f0 Arial;}}\f0 Hello \{world\} \\ done}");
+    public static byte[] Rtf() => Encoding.ASCII.GetBytes(@"{\rtf1\ansi{\fonttbl{\f0 Arial;}}\f0 Hello \{world\} \\ done}");
 
-    internal static byte[] Pst(bool unicode)
+    public static byte[] Pst(bool unicode)
     {
         var b = new byte[4096];
         "!BDN"u8.CopyTo(b);
@@ -122,7 +122,7 @@ public class DocumentValidatorTests
         return b;
     }
 
-    internal static byte[] Lnk()
+    public static byte[] Lnk()
     {
         var ms = new MemoryStream();
         var header = new byte[76];

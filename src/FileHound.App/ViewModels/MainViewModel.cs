@@ -126,7 +126,7 @@ public sealed partial class MainViewModel : ObservableObject
         if (Recovery.IsScanning)
         {
             StatusKind = "busy";
-            StatusText = $"Scanning for deleted files… {Recovery.ScanProgress:P0}";
+            StatusText = $"{Recovery.ScanLabel} {Recovery.ScanProgress:P0}";
         }
         else if (busy.Count > 0)
         {

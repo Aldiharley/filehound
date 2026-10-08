@@ -110,7 +110,7 @@ public sealed partial class UndeleteTabViewModel : ObservableObject
         }
         finally
         {
-            if (ReferenceEquals(_cts, cts)) { IsScanning = false; ProgressText = ""; }
+            if (_cts is null || ReferenceEquals(_cts, cts)) { IsScanning = false; ProgressText = ""; }
             ScanTask = null;
         }
     }

@@ -139,6 +139,106 @@ public class PreviousVersionsTabViewModelTests
     }
 }
 
+public class DeepScanTabViewModelTests
+{
+    private static RecoveryCandidate Carved(string typeId, long lcn, long size, string? info = null)
+    {
+        var f = new CarvedFile(FileHound.Core.Carving.Signatures.ById(typeId)!, lcn, size, info);
+        return new RecoveryCandidate(RecoverySource.Carving, f.SuggestedName, null, size, null, null, RecoveryGrade.Excellent, 100, false, f.Type.Label, f);
+    }
+
+    [Fact]
+    public async Task Consent_gates_the_first_scan_and_is_remembered()
+    {
+        bool consented = false;
+        int scans = 0;
+        var vm = new DeepScanTabViewModel(() => consented, () => consented = true,
+            (_, _, _, _, _) => { scans++; return Task.FromResult<IReadOnlyList<RecoveryCandidate>>([]); });
+        await vm.ScanCommand.ExecuteAsync(null);
+        Assert.True(vm.NeedsConsent);
+        Assert.Equal(0, scans);
+        await vm.ConsentCommand.ExecuteAsync(null);
+        Assert.False(vm.NeedsConsent);
+        Assert.True(consented);
+        Assert.Equal(1, scans);
+        await vm.ScanCommand.ExecuteAsync(null);
+        Assert.Equal(2, scans);
+        Assert.True(vm.HasScanned);
+        Assert.True(vm.IsEmpty);
+    }
+
+    [Fact]
+    public async Task Results_stream_in_batches_filter_by_type_and_sort_by_location()
+    {
+        var items = new[] { Carved("png", 500, 10, "8×8"), Carved("mp3", 200, 20), Carved("jpg", 300, 30) };
+        var vm = new DeepScanTabViewModel(() => true, () => { }, (_, _, progress, batch, _) =>
+        {
+            batch([items[0]]);
+            batch([items[1], items[2]]);
+            return Task.FromResult<IReadOnlyList<RecoveryCandidate>>(items);
+        });
+        await vm.ScanCommand.ExecuteAsync(null);
+        Assert.Equal(3, vm.Count);
+        Assert.Equal("JPEG image", vm.Items[0].TypeLabel);   // sorted by type label
+        Assert.Equal("block 300", vm.Items[0].LocationText);
+        vm.SortChips.Single(c => c.Value == DeepScanSort.Location).IsSelected = true;
+        Assert.Equal(200, ((CarvedFile)vm.Items[0].Candidate.Key).StartLcn);
+        vm.TypeChips.Single(c => c.Value == FileHound.Core.Index.FileCategory.Image).IsSelected = true;
+        Assert.Equal(2, vm.Items.Count);
+        Assert.All(vm.Items, i => Assert.Equal(FileHound.Core.Index.FileCategory.Image, ((CarvedFile)i.Candidate.Key).Type.Category));
+        vm.Items[0].IsSelected = true;
+        Assert.Single(vm.Selected);
+    }
+
+    [Fact]
+    public void Progress_text_matches_the_spec()
+    {
+        const long scanned = 13_314_398_618L, total = 440_234_147_840L;   // 12.4 GB of 410 GB
+        Assert.Equal($"{FileHound.App.Services.Formatting.Size(scanned)} of {FileHound.App.Services.Formatting.Size(total)} · ETA 6 min",
+            DeepScanTabViewModel.FormatProgress(scanned, total, TimeSpan.FromMinutes(5.2)));
+        Assert.StartsWith("12.4 GB of 410", DeepScanTabViewModel.FormatProgress(scanned, total, null));
+        Assert.EndsWith("almost done", DeepScanTabViewModel.FormatProgress(scanned, total, TimeSpan.FromSeconds(20)));
+    }
+
+    [Fact]
+    public async Task Stop_cancels_and_keeps_what_arrived()
+    {
+        var tcs = new TaskCompletionSource();
+        var vm = new DeepScanTabViewModel(() => true, () => { }, async (_, _, _, batch, ct) =>
+        {
+            batch([Carved("png", 1, 10)]);
+            await Task.Delay(Timeout.InfiniteTimeSpan, ct);
+            return [];
+        });
+        var scan = vm.ScanCommand.ExecuteAsync(null);
+        for (int i = 0; i < 50 && vm.Count == 0; i++) await Task.Delay(20);
+        Assert.True(vm.IsScanning);
+        vm.StopCommand.Execute(null);
+        await scan;
+        Assert.False(vm.IsScanning);
+        Assert.Equal(1, vm.Count);
+    }
+}
+
+public class PreviewServiceTests
+{
+    [Fact]
+    public void Zip_entries_and_text_snippets_are_built_from_bytes()
+    {
+        var zip = FileHound.Core.Tests.Carving.DocumentValidatorTests.Zip(("a.txt", "x"), ("b.txt", "y"));
+        var zf = new CarvedFile(FileHound.Core.Carving.Signatures.ById("zip")!, 1, zip.Length, null);
+        var p = FileHound.App.Services.PreviewService.Build(zf, zip, false, "Validated");
+        Assert.Equal("zip", p.Kind);
+        Assert.Equal(["a.txt", "b.txt"], p.Entries);
+        var rtf = FileHound.Core.Tests.Carving.DocumentValidatorTests.Rtf();
+        var rf = new CarvedFile(FileHound.Core.Carving.Signatures.ById("rtf")!, 1, rtf.Length, null);
+        var t = FileHound.App.Services.PreviewService.Build(rf, rtf, false, "Validated");
+        Assert.Equal("text", t.Kind);
+        Assert.Contains("Hello", t.Text);
+        Assert.DoesNotContain("\\rtf", t.Text);
+    }
+}
+
 public class DeletedTabNoiseTests
 {
     private static DeletionEntry E(string name, string parent = @"C:\Users\me\Documents", bool dir = false) =>

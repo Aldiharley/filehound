@@ -8,16 +8,19 @@ namespace FileHound.Indexing.Tests;
 public class UsnRecordParserTests
 {
     /// <summary>Builds a USN_RECORD_V2 the way NTFS lays it out.</summary>
-    internal static byte[] V2(ulong frn, ulong parent, string name, UsnReason reason, uint attrs = 0, long usn = 1000)
+    internal static byte[] V2(ulong frn, ulong parent, string name, UsnReason reason, uint attrs = 0, long usn = 1000, ushort sequence = 0, long timestamp = 0)
     {
         int nameBytes = name.Length * 2;
         int len = (60 + nameBytes + 7) & ~7;
         var b = new byte[len];
         BinaryPrimitives.WriteUInt32LittleEndian(b, (uint)len);
         BinaryPrimitives.WriteUInt16LittleEndian(b.AsSpan(4), 2);
+        // A sequence number given explicitly overrides whatever the caller packed into the FRN's high 16 bits.
+        if (sequence != 0) frn = (frn & 0x0000_FFFF_FFFF_FFFF) | ((ulong)sequence << 48);
         BinaryPrimitives.WriteUInt64LittleEndian(b.AsSpan(8), frn);
         BinaryPrimitives.WriteUInt64LittleEndian(b.AsSpan(16), parent);
         BinaryPrimitives.WriteInt64LittleEndian(b.AsSpan(24), usn);
+        BinaryPrimitives.WriteInt64LittleEndian(b.AsSpan(32), timestamp);
         BinaryPrimitives.WriteUInt32LittleEndian(b.AsSpan(40), (uint)reason);
         BinaryPrimitives.WriteUInt32LittleEndian(b.AsSpan(52), attrs);
         BinaryPrimitives.WriteUInt16LittleEndian(b.AsSpan(56), (ushort)nameBytes);

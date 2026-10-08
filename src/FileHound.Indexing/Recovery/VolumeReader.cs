@@ -90,7 +90,7 @@ public sealed class VolumeReader : IDisposable
             BytesPerSector: (int)*(uint*)(data + 40),
             BytesPerCluster: (int)*(uint*)(data + 44),
             RecordSize: (int)*(uint*)(data + 48),
-            TotalClusters: *(long*)(data + 32),
+            TotalClusters: *(long*)(data + 16),   // NTFS_VOLUME_DATA_BUFFER: NumberSectors @8, TotalClusters @16, FreeClusters @24, TotalReserved @32
             MftStartLcn: *(long*)(data + 64),
             MftValidDataLength: *(long*)(data + 56));
         Validate(g);

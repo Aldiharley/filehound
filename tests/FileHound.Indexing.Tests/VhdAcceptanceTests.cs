@@ -10,22 +10,33 @@ public class VhdAcceptanceTests
 {
     private static string Sha(byte[] b) => Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(b));
 
+    /// <summary>Deleting a file before the lazy writer runs discards its cached data unwritten; real deletions come much later, so flush.</summary>
+    private static void WriteThrough(string path, byte[] data)
+    {
+        using var fs = new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.None, 1 << 16);
+        fs.Write(data);
+        fs.Flush(flushToDisk: true);
+    }
+
     [Fact, Trait("Category", "Elevated")]
     public void Undelete_round_trip_on_a_fresh_ntfs_volume()
     {
         if (!Elevation.IsElevated) return;
-        using var vhd = VirtualDisk.Create(Path.Combine(Path.GetTempPath(), $"fh-{Guid.NewGuid():N}.vhdx"), out string reason);
+        // Legacy .vhd rather than .vhdx: VHDX honours TRIM, so deleted clusters would read back as zeros like on an SSD.
+        using var vhd = VirtualDisk.Create(Path.Combine(Path.GetTempPath(), $"fh-{Guid.NewGuid():N}.vhd"), out string reason);
         if (vhd is null) return; // diskpart unavailable here: nothing to assert (reason is in the test output)
         var root = vhd.Root;
         var rng = new Random(42);
         byte[] big = new byte[3_000_000]; rng.NextBytes(big);      // multi-run candidate
         byte[] small = new byte[600]; rng.NextBytes(small);         // resident candidate
         byte[] jpg = new byte[200_000]; rng.NextBytes(jpg); jpg[0] = 0xFF; jpg[1] = 0xD8; jpg[2] = 0xFF;
+        // NTFS hands a new file the lowest free MFT record, so the victim is created first: after the deletes, the
+        // overwriter takes its record (and most likely its clusters), which is exactly the "record reused" case.
+        WriteThrough(root + "victim.bin", big);
         Directory.CreateDirectory(root + "Photos");
-        File.WriteAllBytes(root + @"Photos\holiday.jpg", jpg);
-        File.WriteAllBytes(root + "big.bin", big);
-        File.WriteAllBytes(root + "small.txt", small);
-        File.WriteAllBytes(root + "victim.bin", big);
+        WriteThrough(root + @"Photos\holiday.jpg", jpg);
+        WriteThrough(root + "big.bin", big);
+        WriteThrough(root + "small.txt", small);
         var expected = new Dictionary<string, string> { ["holiday.jpg"] = Sha(jpg), ["big.bin"] = Sha(big), ["small.txt"] = Sha(small) };
         foreach (var n in new[] { @"Photos\holiday.jpg", "big.bin", "small.txt", "victim.bin" }) File.Delete(root + n);
         File.WriteAllBytes(root + "overwriter.bin", new byte[6_000_000]);   // likely lands on victim's clusters
@@ -48,8 +59,9 @@ public class VhdAcceptanceTests
                 Assert.True(sha == got, $"{name}: hash mismatch — {about}");
             }
             Assert.Equal(root + "Photos", Assert.Single(candidates, x => x.Name == "holiday.jpg").OriginalFolder);
-            var victim = Assert.Single(candidates, x => x.Name == "victim.bin");
-            // A fresh volume may place the overwriter elsewhere; the point is that the grade tells the truth either way.
+            var victim = candidates.SingleOrDefault(x => x.Name == "victim.bin");
+            // Either its record was reused (gone from the list) or the grade must tell the truth about its clusters.
+            if (victim is null) return;
             if (victim.Grade is RecoveryGrade.Excellent or RecoveryGrade.Good)
             {
                 var (_, got, _, _) = UndeleteWriter.Recover(reader, bitmap, (UndeleteRecord)victim.Key, victim.Grade, Path.Combine(dest, "victim.bin"), CancellationToken.None);

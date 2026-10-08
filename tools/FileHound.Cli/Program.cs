@@ -33,6 +33,14 @@ if (command == "turbo-validate")
     return await TurboValidation.RunAsync(letter, turboData, report);
 }
 
+if (command == "recovery-probe")
+{
+    // filehound-cli recovery-probe C --report <file> [--no-snapshot]   (must run elevated)
+    string report = TakeOption(argList, "--report") ?? Path.Combine(Path.GetTempPath(), "filehound-recovery-probe.txt");
+    bool noSnapshot = TakeFlag(argList, "--no-snapshot");
+    return RecoveryProbe.Run(char.ToUpperInvariant((rest.FirstOrDefault() ?? "C")[0]), report, allowSnapshot: !noSnapshot);
+}
+
 if (command == "mft-diff")
 {
     // filehound-cli mft-diff C --report <file>   (must run elevated)

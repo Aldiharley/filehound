@@ -44,6 +44,16 @@ public sealed class DeletionLog : IDisposable
         if (!on) Flush();
     }
 
+    /// <summary>
+    /// Reads the journal from its oldest available record up to the newest one already in the store, so deletions that
+    /// happened while FileHound was not running are listed. Needs the volume handle (elevated); otherwise a no-op.
+    /// </summary>
+    public Task BackfillAsync(CancellationToken ct) => Task.Run(() =>
+    {
+        long from = _updater.ReplayHistory(_store.LastUsn, ct);
+        if (from >= 0) Changed?.Invoke(this, EventArgs.Empty);
+    }, ct);
+
     public void Flush()
     {
         if (_suspended || !_store.IsDirty) return;

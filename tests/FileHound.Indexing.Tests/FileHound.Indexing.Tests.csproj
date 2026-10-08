@@ -13,5 +13,6 @@
     <Using Include="FileHound.Core.Index" />
     <Using Include="FileHound.Indexing" />
     <ProjectReference Include="..\..\src\FileHound.Indexing\FileHound.Indexing.csproj" />
+    <ProjectReference Include="..\FileHound.Core.Tests\FileHound.Core.Tests.csproj" />
   </ItemGroup>
 </Project>

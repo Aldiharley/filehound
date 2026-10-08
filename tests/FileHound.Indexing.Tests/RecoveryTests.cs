@@ -107,6 +107,110 @@ public class DeletionEventTests
     }
 }
 
+public sealed class RecycleBinSourceTests : IDisposable
+{
+    private readonly TempTree _drive = new();     // fake drive root holding $Recycle.Bin
+    private readonly TempTree _home = new();      // where "original" paths live
+    private readonly string _sid = System.Security.Principal.WindowsIdentity.GetCurrent().User!.Value;
+
+    public void Dispose() { _drive.Dispose(); _home.Dispose(); }
+
+    private string Bin => Path.Combine(_drive.Root, "$Recycle.Bin", _sid);
+
+    private void Put(string id, string originalPath, byte[]? data, bool folder = false)
+    {
+        Directory.CreateDirectory(Bin);
+        var when = new DateTime(2026, 10, 7, 9, 30, 0, DateTimeKind.Utc);
+        File.WriteAllBytes(Path.Combine(Bin, "$I" + id), FileHound.Core.Tests.RecycleBinFixtures.V2(originalPath, data?.Length ?? 0, when));
+        if (folder) { var d = Directory.CreateDirectory(Path.Combine(Bin, "$R" + id)); File.WriteAllText(Path.Combine(d.FullName, "inner.txt"), "x"); }
+        else if (data is not null) File.WriteAllBytes(Path.Combine(Bin, "$R" + id), data);
+    }
+
+    private DriveDescriptor Drive => new('Z', _drive.Root, "NTFS", "Test", 1000, 500, 1, false);
+
+    [Fact]
+    public void Enumerates_files_folders_and_orphans()
+    {
+        Put("AAA111.txt", Path.Combine(_home.Root, "docs", "notes.txt"), [1, 2, 3]);
+        Put("BBB222", Path.Combine(_home.Root, "proj"), null, folder: true);
+        Put("CCC333.pdf", Path.Combine(_home.Root, "lost.pdf"), null);                 // $I only
+        File.WriteAllBytes(Path.Combine(Bin, "$RDDD444.jpg"), [9, 9]);                 // $R only
+
+        var items = RecycleBinSource.Enumerate([Drive], allUsers: false);
+        Assert.Equal(4, items.Count);
+        var notes = items.Single(i => i.DisplayName == "notes.txt");
+        Assert.Equal(3, notes.Size); Assert.True(notes.HasData); Assert.False(notes.IsDirectory);
+        Assert.True(items.Single(i => i.DisplayName == "proj").IsDirectory);
+        var lost = items.Single(i => i.DisplayName == "lost.pdf");
+        Assert.False(lost.HasData);
+        var orphan = items.Single(i => i.DisplayName == "$RDDD444.jpg");
+        Assert.False(orphan.HasMetadata); Assert.Equal(2, orphan.Size);
+
+        var cands = RecycleBinSource.ToCandidates(items).ToList();
+        Assert.Equal(RecoveryGrade.Excellent, cands.Single(c => c.Name == "notes.txt").Grade);
+        Assert.Equal(Path.Combine(_home.Root, "docs"), cands.Single(c => c.Name == "notes.txt").OriginalFolder);
+        Assert.Equal("data file missing", cands.Single(c => c.Name == "lost.pdf").Detail);
+        Assert.Equal("no metadata — original name unknown", cands.Single(c => c.Name == "$RDDD444.jpg").Detail);
+    }
+
+    [Fact]
+    public void Restore_moves_back_and_never_overwrites()
+    {
+        var original = Path.Combine(_home.Root, "docs", "notes.txt");
+        Put("AAA111.txt", original, [1, 2, 3]);
+        var item = RecycleBinSource.Enumerate([Drive], false).Single();
+
+        var restored = RecycleBinSource.Restore(item, keepBoth: false);
+        Assert.Equal(original, restored);
+        Assert.Equal([1, 2, 3], File.ReadAllBytes(original));
+        Assert.False(File.Exists(item.MetadataPath));
+        Assert.False(File.Exists(item.DataPath));
+
+        Put("AAA112.txt", original, [4]);
+        var again = RecycleBinSource.Enumerate([Drive], false).Single();
+        Assert.Throws<IOException>(() => RecycleBinSource.Restore(again, keepBoth: false));
+        var kept = RecycleBinSource.Restore(again, keepBoth: true);
+        Assert.Equal(Path.Combine(_home.Root, "docs", "notes (restored).txt"), kept);
+        Assert.Equal([1, 2, 3], File.ReadAllBytes(original));
+    }
+
+    [Fact]
+    public void CopyTo_leaves_bin_untouched()
+    {
+        Put("BBB222", Path.Combine(_home.Root, "proj"), null, folder: true);
+        var item = RecycleBinSource.Enumerate([Drive], false).Single();
+        var dest = Path.Combine(_home.Root, "out");
+        var copied = RecycleBinSource.CopyTo(item, dest);
+        Assert.Equal(Path.Combine(dest, "proj"), copied);
+        Assert.True(File.Exists(Path.Combine(copied, "inner.txt")));
+        Assert.True(Directory.Exists(item.DataPath));
+        Assert.True(File.Exists(item.MetadataPath));
+    }
+
+    [Fact]
+    public void Other_users_bins_are_skipped_unless_all_users()
+    {
+        Put("AAA111.txt", Path.Combine(_home.Root, "a.txt"), [1]);
+        var other = Path.Combine(_drive.Root, "$Recycle.Bin", "S-1-5-21-999-999-999-1234");
+        Directory.CreateDirectory(other);
+        File.WriteAllBytes(Path.Combine(other, "$IZZZ.txt"), FileHound.Core.Tests.RecycleBinFixtures.V2(@"C:\o.txt", 1, DateTime.UtcNow));
+        File.WriteAllBytes(Path.Combine(other, "$RZZZ.txt"), [1]);
+        Assert.Single(RecycleBinSource.Enumerate([Drive], allUsers: false));
+        Assert.Equal(2, RecycleBinSource.Enumerate([Drive], allUsers: true).Count);
+    }
+}
+
+public class JournalGapOracleTests
+{
+    [Fact, Trait("Category", "Elevated")]
+    public void Record_16_is_in_use_and_a_huge_record_number_is_free()
+    {
+        if (!Elevation.IsElevated) return;
+        Assert.Equal(JournalGapOracle.SlotState.Reused, JournalGapOracle.Check('C', 16));
+        Assert.Equal(JournalGapOracle.SlotState.Free, JournalGapOracle.Check('C', long.MaxValue / 4));
+    }
+}
+
 public sealed class DeletionLogTests : IDisposable
 {
     private readonly string _dir = Directory.CreateTempSubdirectory("fh-dl-").FullName;

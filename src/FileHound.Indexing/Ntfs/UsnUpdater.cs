@@ -108,6 +108,68 @@ public sealed class UsnUpdater : IDisposable
         return applied;
     }
 
+    /// <summary>
+    /// Replays the journal's history from its oldest record up to <paramref name="untilUsn"/> (exclusive), raising only
+    /// <see cref="Deleted"/> — the index is not modified, because those changes are already reflected in it.
+    /// Returns the USN the replay started from, or -1 when the journal could not be opened.
+    /// </summary>
+    internal unsafe long ReplayHistory(long untilUsn, CancellationToken ct)
+    {
+        using var h = Kernel32.OpenVolume(_letter);
+        if (h.IsInvalid) return -1;
+        if (!MftScanner.TryQueryJournal(_letter, out ulong journalId, out long firstUsn, out long nextUsn)) return -1;
+        long stop = untilUsn > 0 ? Math.Min(untilUsn, nextUsn) : nextUsn;
+        if (firstUsn >= stop) return firstUsn;
+        const int BufferSize = 256 * 1024;
+        byte* buffer = (byte*)NativeMemory.Alloc(BufferSize);
+        try
+        {
+            long cursor = firstUsn;
+            while (cursor < stop && !ct.IsCancellationRequested)
+            {
+                var read = new ReadUsnJournalDataV1
+                {
+                    StartUsn = cursor, ReasonMask = (uint)(UsnReason.FileDelete | UsnReason.RenameNewName | UsnReason.FileCreate | UsnReason.Close),
+                    ReturnOnlyOnClose = 1, Timeout = 0, BytesToWaitFor = 0, UsnJournalID = journalId, MinMajorVersion = 2, MaxMajorVersion = 3,
+                };
+                if (!Kernel32.DeviceIoControl(h, Kernel32.FSCTL_READ_USN_JOURNAL, &read, sizeof(ReadUsnJournalDataV1), buffer, BufferSize, out int returned, 0)) break;
+                long next = *(long*)buffer;
+                if (returned > 8) ReplayDeletions(new ReadOnlySpan<byte>(buffer + 8, returned - 8), stop);
+                if (returned <= 8 || next == cursor) break;
+                cursor = next;
+            }
+            return firstUsn;
+        }
+        finally { NativeMemory.Free(buffer); }
+    }
+
+    /// <summary>History replay: raise <see cref="Deleted"/> for deletes and leaves-tree renames without touching the index.</summary>
+    private void ReplayDeletions(ReadOnlySpan<byte> records, long stopUsn)
+    {
+        _index.Lock.EnterReadLock();
+        try
+        {
+            while (UsnRecordParser.TryRead(records, out var rec))
+            {
+                records = records[rec.Length..];
+                if (rec.Usn >= stopUsn) return;
+                int parent = rec.ParentRecordNo == RootRecord ? VolumeIndex.RootEntry : _index.FindByRecord(rec.ParentRecordNo);
+                bool parentIndexed = parent == VolumeIndex.RootEntry || _index.IsLive(parent);
+                if ((rec.Reason & UsnReason.FileDelete) != 0)
+                {
+                    RaiseDeleted(rec, -1, parent, parentIndexed, DeletionKind.Deleted);
+                }
+                else if ((rec.Reason & UsnReason.RenameNewName) != 0)
+                {
+                    var leaving = ClassifyLeaving(rec, parent, parentIndexed);
+                    if (leaving is { } kind) RaiseDeleted(rec, -1, -1, false, kind);
+                }
+                else if ((rec.Reason & UsnReason.FileCreate) != 0) NoteReplacement(rec);
+            }
+        }
+        finally { _index.Lock.ExitReadLock(); }
+    }
+
     /// <summary>Applies a buffer of USN records (without the leading 8-byte USN). Returns the number of changes.</summary>
     internal int ApplyBuffer(ReadOnlySpan<byte> records)
     {

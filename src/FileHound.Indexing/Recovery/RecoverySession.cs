@@ -90,6 +90,17 @@ public sealed class RecoverySession : IDisposable
         finally { Interlocked.CompareExchange(ref _carver, null, carver); }
     }, ct);
 
+    /// <summary>"Is this deleted file's MFT record still free?" — by reading the record when the drive can be read raw, else through the FSCTL oracle.</summary>
+    public JournalGapOracle.SlotState[] CheckSlots(IReadOnlyList<long> recordNos)
+    {
+        try { return JournalGapOracle.CheckMany(Reader, recordNos); }
+        catch (Exception ex) when (ex is NotSupportedException or IOException or UnauthorizedAccessException or InvalidDataException)
+        {
+            IndexManager.Log?.Invoke($"Slot check falls back to FSCTL on {Drive.Letter}: {ex.Message}");
+            return JournalGapOracle.CheckMany(Drive.Letter, recordNos);
+        }
+    }
+
     public bool IsCarvePaused => _carver?.IsPaused ?? false;
     public void PauseCarve() => _carver?.Pause();
     public void ResumeCarve() => _carver?.Resume();

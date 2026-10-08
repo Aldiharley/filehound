@@ -22,6 +22,30 @@ public static class JournalGapOracle
         return Check(h, recordNo);
     }
 
+    /// <summary>
+    /// The direct answer when raw reads work: the record's own in-use flag. A deleted file's record is not in use until
+    /// NTFS hands it to a new file. Records outside the MFT or unreadable are Unknown.
+    /// </summary>
+    public static SlotState[] CheckMany(VolumeReader reader, IReadOnlyList<long> recordNos)
+    {
+        var result = new SlotState[recordNos.Count];
+        for (int i = 0; i < recordNos.Count; i++)
+        {
+            long n = recordNos[i];
+            if (n < 0 || n >= reader.RecordCount) { result[i] = SlotState.Unknown; continue; }
+            try
+            {
+                var record = reader.ReadRecord(n);
+                result[i] = Ntfs.MftRecordParser.TryParse(record, out var r) ? (r.InUse ? SlotState.Reused : SlotState.Free) : SlotState.Unknown;
+            }
+            catch (Exception ex) when (ex is IOException or InvalidDataException or UnauthorizedAccessException or ObjectDisposedException)
+            {
+                result[i] = SlotState.Unknown;
+            }
+        }
+        return result;
+    }
+
     /// <summary>Checks many records on one volume handle; every result is Unknown when the volume cannot be opened (not elevated).</summary>
     public static SlotState[] CheckMany(char letter, IReadOnlyList<long> recordNos)
     {

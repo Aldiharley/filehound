@@ -1,34 +1,36 @@
-# FileHound 🐾
+# FileHound
 
-**Fast, friendly file finding for every drive on Windows 11.**
-FileHound indexes every file and folder on all your local drives (C:, D:, E:, USB disks…) and finds them as you type, even with missing letters or typos, in a soft pastel "clay" interface.
+**Find any file on any drive as you type. Bring deleted ones back.**
+
+FileHound is an open-source Windows 11 desktop app (C#, .NET 10, WPF) that indexes every file and folder on all your local drives and finds them instantly, even when you only remember part of a name or misspell it. Since 1.2 it also has a **Recovery** page that brings deleted files back from five sources, from the Recycle Bin all the way down to signature-carving the drive's free space, and tells you honestly what can and cannot come back.
+
+It exists because the two things you want most when a file is missing, *where is it?* and *can I get it back?*, usually live in two different tools, one of which is grey and scary. FileHound puts both behind one hotkey, in a soft pastel "clay" interface with a hound who does the sniffing.
+
+Who it is for: anyone on Windows who has more than one drive and has ever typed a filename into Explorer's search box and waited. Power users get Everything-style query syntax, an MFT-reading Turbo mode and DFXML exports; everyone else gets a search box that just works.
 
 ![Dashboard](docs/screenshots/dashboard.png)
 
-| Search (fuzzy) | Drives |
+## Screenshots
+
+| Search, fuzzy query | Drives |
 |---|---|
 | ![Search](docs/screenshots/search.png) | ![Drives](docs/screenshots/drives.png) |
 
-## Highlights
+| Recovery: Recently deleted | Recovery: Undelete |
+|---|---|
+| ![Recently deleted](docs/screenshots/recovery-deleted.png) | ![Undelete](docs/screenshots/recovery-undelete.png) |
 
-- **Whole-disk coverage.** Every ready fixed and removable drive is indexed, whatever its filesystem (NTFS, exFAT, FAT32, ReFS).
-- **Instant search.** A parallel, allocation-free engine searches 4 million entries in about 10–80 ms.
-- **Fuzzy ("blur") matching.** Results are ranked by match quality, best first:
-  - exact name
-  - prefix
-  - start of a word (`final_report`, `FinalReport`)
-  - anywhere in the name
-  - letters in order: `qrtrly` → *quarterly_report.xlsx*
-  - small typos: `quartelry`, `budjet`
-- **Always fresh.** Live updates come from the NTFS USN journal (Turbo mode) or FileSystemWatcher (Standard mode).
-- **Fast restarts.** Each drive's index is saved as a compact binary snapshot, and 4 million entries load in about 1 second.
-- **Everything-style query syntax** with category chips, sorting and match highlighting.
-- **Built for the keyboard.** Global hotkey, tray icon, Enter to open, Ctrl+Enter to open the containing folder, Ctrl+Shift+C to copy the path, and drag a result out to Explorer.
-- **Self-healing.** If a live-update loop ever fails, FileHound says so and re-indexes the drive instead of quietly going stale.
+| Recovery: Deep scan with preview | Recovery: Recycle Bin |
+|---|---|
+| ![Deep scan](docs/screenshots/recovery-deepscan.png) | ![Recycle Bin](docs/screenshots/recovery.png) |
+
+| Before the first deep scan | Settings |
+|---|---|
+| ![Deep scan consent](docs/screenshots/recovery-deepscan-consent.png) | ![Settings](docs/screenshots/settings.png) |
 
 ## Install
 
-Two downloads on the [latest release](https://github.com/Aldiharley/filehound/releases/latest):
+Two downloads on the [latest release](https://github.com/Aldiharley/filehound/releases/latest). Pick one.
 
 | | Installer `FileHound-Setup-v<version>.exe` | Portable `FileHound.exe` |
 |---|---|---|
@@ -37,69 +39,36 @@ Two downloads on the [latest release](https://github.com/Aldiharley/filehound/re
 | Size | ~5 MB (+ runtime when needed) | ~140 MB |
 | Needs admin | No for a per-user install; the runtime installer asks once if it has to run | No |
 
-Either way:
-
-1. Windows SmartScreen may warn the first time because the files are not code-signed; choose **More info → Run anyway**.
-2. Press **Ctrl+Alt+Space** to search. If another app already uses that shortcut, FileHound picks the first free one instead (usually **Ctrl+Shift+Space**). **Settings → Global hotkey** shows which one is active and lets you change it. Turn on **Start with Windows** in Settings so the hotkey is always ready.
-
-FileHound greets you by your Windows display name. Change it, or clear it to go back to automatic, under **Settings → General → Your name**.
-
-To check a download, compare its hash with `SHA256SUMS.txt` from the same release:
+Either way, Windows SmartScreen may warn the first time because the files are not code-signed; choose **More info → Run anyway**. To check a download, compare its hash with `SHA256SUMS.txt` from the same release:
 
 ```powershell
 Get-FileHash .\FileHound.exe -Algorithm SHA256
 ```
 
-Data lives in `%LOCALAPPDATA%\FileHound`: `settings.json`, the `index\*.fhx` snapshots, `recovery\*.dlog` deletion logs, and `logs\`. The installer's uninstaller removes the program, the shortcuts, the start-with-Windows entry and the rebuildable `index\` and `logs\` folders, and keeps `settings.json` and the deletion logs for a reinstall (delete the folder to remove everything). For the portable exe: exit FileHound from the tray, delete the exe and that folder, and turn off **Start with Windows** first if you had enabled it.
+Both need 64-bit Windows; the installer accepts Windows 10 1809 or later, and all testing happens on Windows 11.
 
-Building the installer yourself needs [Inno Setup 6](https://jrsoftware.org/isinfo.php) (`winget install JRSoftware.InnoSetup`), then `.\build.ps1 -Installer`; the script is [`installer/FileHound.iss`](installer/FileHound.iss).
+## Quick start (60 seconds)
 
-## Indexing modes
+1. **Run it.** FileHound greets you by your Windows display name and starts indexing every ready drive in Standard mode. You can search while it works; the header chip shows the indexing progress until it is done.
+2. **Press Ctrl+Alt+Space** from anywhere and type. Try `invce scan`: fuzzy matching finds `Invoice scan 2026-03.pdf`. Enter opens the top result, Ctrl+Enter opens its folder, Esc clears or hides.
+3. **Turn on Turbo** (sidebar card, or Drives → *Enable Turbo*). One administrator approval, and FileHound relaunches reading each NTFS drive's master file table directly: millions of files in seconds, kept live by the change journal. Turbo also unlocks four of the five Recovery sources.
+4. **Lost something?** Open **Recovery**, pick the drive, and work left to right through the tabs: Recycle Bin, Recently deleted, Undelete, Previous versions, Deep scan. Pick a folder on *another* drive and click Recover.
+5. **Keep it ready.** Settings → *Start with Windows*, so the hotkey is always there. Closing the window hides it to the tray.
 
-| | Standard (default) | Turbo |
-|---|---|---|
-| How | Parallel folder walk (`FileSystemEnumerable`) | Reads the NTFS master file table (MFT) directly, the technique Everything uses; three tiers, see below |
-| Live updates | FileSystemWatcher | USN change journal |
-| Speed (C:, ~5M entries) | 24 s warm / 161 s cold | 7.8 s, including sizes and dates (file-record tier) |
-| Speed (M:, 2.5M entries, HDD) | | 25.6 s cold / 9.5 s warm, including sizes and dates (raw tier) |
-| Restart | snapshot in ~1 s, then a background refresh walk | snapshot in ~1.5 s, journal catch-up, ready in ~2.3 s |
+## Search
 
-Turbo tries three ways of reading the MFT, fastest first, and falls back automatically:
+Type any part of a name. Results are ranked by match quality, best first:
 
-1. **Raw `$MFT` read.** Sequential 4 MB reads straight from the volume, with names, sizes and dates in one pass. This is used unless the MFT is fragmented across extension records.
-2. **Per-record reads with `FSCTL_GET_NTFS_FILE_RECORD`.** Several threads, one call per in-use record, still in one pass. This is used when raw volume reads are blocked; on the development PC, security software refuses them on C: with Win32 error 50.
-3. **`FSCTL_ENUM_USN_DATA`.** This returns names only, and sizes and dates are filled in afterwards.
+- exact name
+- prefix
+- start of a word (`final_report`, `FinalReport`)
+- anywhere in the name
+- letters in order: `qrtrly` → *quarterly_report.xlsx*
+- small typos: `quartelry`, `budjet`
 
-Turbo lists each hard-linked file under one of its names (as Everything does), while Standard mode lists every link.
-| Needs | nothing | administrator approval, given once per launch via **Enable Turbo** |
+A parallel, allocation-free engine searches 4 million entries in about 10–80 ms. Matched characters are highlighted, and category chips (Folders, Documents, Images, Video, Audio, Archives, Apps, Code) narrow the list with one click or Ctrl+1…9.
 
-When FileHound runs elevated it opens files through the normal desktop shell, so they never inherit admin rights. Drag-out is disabled while elevated, because Windows blocks dragging from an elevated app into a normal one.
-
-## Recovery
-
-The **Recovery** page brings deleted files back, one drive at a time, from these sources:
-
-| Tab | Where it looks | Needs Turbo | Puts files |
-|---|---|---|---|
-| **Recycle Bin** | Every `$Recycle.Bin` on the drive (other accounts' bins too when elevated) | no | back in place (*Restore*) or in a folder on another drive (*Recover*) |
-| **Recently deleted** | A log of deletions FileHound builds from the NTFS change journal, including files that skipped the bin (Shift+Delete, command line, apps). Each entry shows whether its MFT record is still free | yes | on another drive |
-| **Undelete** | The master file table's deleted records, read raw from the volume (or from the physical disk, or from a shadow copy, when security software blocks volume reads). Each record is graded against the cluster bitmap: *Excellent*, *Good* (header doesn't match the type), *Partially overwritten (N %)*, *Overwritten*, *Zeroed* (SSD TRIM), *Encrypted*. Sparse and LZNT1-compressed files are reassembled | yes | on another drive |
-| **Previous versions** | Windows shadow copies (restore points). Paste a path and every snapshot that still holds it is listed, newest first. *Freeze this drive now* creates a snapshot on demand, after a warning that it writes to the drive | yes | next to the current file as `name (from <date>).ext` (*Restore*) or in any folder (*Save*) |
-| **Deep scan** | Every free cluster, read for file signatures. 23 validators measure each hit exactly (JPEG, PNG, GIF, BMP, TIFF, WebP, WAV/AVI, MP4/MOV, MKV, OGG, MP3, FLAC, PDF, ZIP incl. docx/xlsx/pptx/epub/odt/jar, 7z, RAR, GZIP, SQLite, EXE/DLL, Office 97-2003, RTF, PST, LNK), so a result is a whole file or nothing. Pause/resume/stop, type filters, previews (images, text, ZIP entries). Results are named `type_block.ext` | yes | on another drive |
-
-Rules that always hold:
-
-- **Read-only.** While the Recovery page is open on a drive, FileHound stops writing to it: no snapshot saves, no deletion-log saves. The drive's own index keeps updating in memory.
-- **Different drive.** Anything recovered (as opposed to restored in place) must go to a folder on another volume, so a recovery can never overwrite the data it is recovering. The page refuses a destination on the source volume.
-- **Honest grades.** Every candidate carries a chip: *Excellent*, *Recoverable (slot intact)*, *Record reused*, *In Recycle Bin*, *Unknown*. Tooltips say what the grade means and why.
-- **Receipts.** Each recovered file is hashed (SHA-256) and listed in `manifest.csv` inside a `FileHound Recovery <date> <time>` folder; the lists export as CSV, and the session as [DFXML](https://github.com/dfxml-working-group/dfxml_schema) with the byte runs each undeleted file was read from.
-- **Re-checked before copying.** Undelete re-reads the cluster bitmap just before copying a file; clusters reused since the scan downgrade the grade shown in the results instead of being silently copied as if intact.
-- **Consent before the first deep scan.** The page explains once what a deep scan reads (all free space, including other accounts' deleted data), the SSD caveat, and why to use the PC as little as possible meanwhile.
-- **Recovered programs are marked.** Carved `.exe`/`.dll`/scripts get the Mark-of-the-Web, so SmartScreen treats them as downloads.
-
-The deletion log lives in `%LOCALAPPDATA%\FileHound\recovery\<letter>_<serial>.dlog` (last 50,000 deletions per drive) and is backfilled from the journal's history the first time Turbo runs, so deletions from before FileHound was installed show up too, as far back as the journal reaches.
-
-## Query syntax
+### Query syntax
 
 | Query | Meaning |
 |---|---|
@@ -116,7 +85,7 @@ The deletion log lives in `%LOCALAPPDATA%\FileHound\recovery\<letter>_<serial>.d
 | `path:work`, `src\core` | matches anywhere in the folder path |
 | `drive:E` | one drive only |
 
-## Keyboard
+### Keyboard
 
 | Keys | Action |
 |---|---|
@@ -129,9 +98,76 @@ The deletion log lives in `%LOCALAPPDATA%\FileHound\recovery\<letter>_<serial>.d
 | Ctrl+1…9 | Pick a category chip |
 | Esc | Clear the search, or hide the window if the search is already empty |
 
-## Build & run
+You can also drag a result straight out into Explorer or another app (not while elevated; see [Privacy & safety](#privacy--safety)).
 
-Requirements: Windows 10/11 and any [.NET 10 SDK](https://dotnet.microsoft.com/download). The published `FileHound.exe` is self-contained, so people who only run it need no .NET at all.
+## Recovery
+
+The **Recovery** page brings deleted files back, one NTFS drive at a time, from five sources. Cheapest and most reliable first:
+
+| Tab | Where it looks | Needs Turbo | Recovered files go |
+|---|---|---|---|
+| **Recycle Bin** | Every `$Recycle.Bin` on the drive (other accounts' bins too when elevated) | no | back in place (*Restore*) or to a folder on another drive (*Recover*) |
+| **Recently deleted** | A log of deletions FileHound builds from the NTFS change journal, including files that skipped the bin (Shift+Delete, command line, apps). Each entry shows whether its MFT record is still free | yes | to another drive |
+| **Undelete** | The master file table's deleted records, read raw from the volume (or from the physical disk, or from a shadow copy, when security software blocks volume reads). Each record is graded against the cluster bitmap: *Excellent*, *Good* (header doesn't match the type), *Partially overwritten (N %)*, *Overwritten*, *Zeroed* (SSD TRIM), *Encrypted*. Sparse and LZNT1-compressed files are reassembled | yes | to another drive |
+| **Previous versions** | Windows shadow copies (restore points). Paste a path and every snapshot that still holds it is listed, newest first. *Freeze this drive now* creates a snapshot on demand, after a warning that it writes to the drive | yes | next to the current file as `name (from <date>).ext` (*Restore*) or to any folder (*Save*) |
+| **Deep scan** | Every free cluster, read for file signatures. 23 validators measure each hit exactly (JPEG, PNG, GIF, BMP, TIFF, WebP, WAV/AVI, MP4/MOV, MKV, OGG, MP3, FLAC, PDF, ZIP incl. docx/xlsx/pptx/epub/odt/jar, 7z, RAR, GZIP, SQLite, EXE/DLL, Office 97-2003, RTF, PST, LNK), so a result is a whole file or nothing. Pause/resume/stop, type filters, previews (images, text, ZIP entries). Results are named `type_block.ext` | yes | to another drive |
+
+Every candidate carries a grade chip (*Excellent*, *Recoverable (slot intact)*, *Record reused*, *In Recycle Bin*, *Unknown*, and the Undelete grades above) with a tooltip saying what it means and why. Undelete re-reads the cluster bitmap right before copying, so clusters reused since the scan downgrade the grade instead of being copied as if intact.
+
+Each recovered file is hashed (SHA-256) and listed in `manifest.csv` inside a `FileHound Recovery <date> <time>` folder. Any list exports as CSV, and a session exports as [DFXML](https://github.com/dfxml-working-group/dfxml_schema) with the byte runs each undeleted file was read from.
+
+The deletion log lives in `%LOCALAPPDATA%\FileHound\recovery\<letter>_<serial>.dlog` (last 50,000 deletions per drive) and is backfilled from the journal's history the first time Turbo runs, so deletions from before FileHound was installed show up too, as far back as the journal reaches.
+
+### What can't come back
+
+FileHound grades rather than guesses, and some grades are final:
+
+- **Zeroed (SSD TRIM).** On SSDs, Windows tells the drive to discard deleted data within seconds. If a file shows *Zeroed*, no copy of it exists on this drive. Deep scan cannot find it either.
+- **Overwritten clusters.** Other files have been written over the space the deleted file used. *Partially overwritten (N %)* files come back with gaps; *Overwritten* ones do not come back.
+- **Record reused.** Another file has taken the deleted file's MFT record, so its name and folder are gone. Deep scan can still find the contents by signature, but the result is named `type_block.ext`, not the original name.
+- **Encrypted (EFS).** Files encrypted with EFS cannot be decrypted outside the account that encrypted them, so FileHound lists them but will not recover them.
+- **Not NTFS.** Recently deleted, Undelete, Previous versions and Deep scan work on NTFS only. FAT/exFAT/ReFS volumes get the Recycle Bin tab.
+- **Fragmented carving.** Deep scan recovers contiguous files only; Undelete handles fragmentation because the record holds the data runs.
+
+The best thing you can do after an accidental delete is to use the PC as little as possible until you have recovered what you need. The page tells you this once, before the first deep scan.
+
+## Indexing modes
+
+| | Standard (default) | Turbo |
+|---|---|---|
+| How | Parallel folder walk (`FileSystemEnumerable`) | Reads the NTFS master file table (MFT) directly, the technique Everything uses; three tiers, see below |
+| Live updates | FileSystemWatcher | USN change journal |
+| Speed (C:, ~5M entries) | 24 s warm / 161 s cold | 7.8 s, including sizes and dates (file-record tier) |
+| Speed (M:, 2.5M entries, HDD) | | 25.6 s cold / 9.5 s warm, including sizes and dates (raw tier) |
+| Restart | snapshot in ~1 s, then a background refresh walk | snapshot in ~1.5 s, journal catch-up, ready in ~2.3 s |
+| Needs | nothing | administrator approval, given once per launch via **Enable Turbo** |
+
+Every ready fixed and removable drive is indexed, whatever its filesystem (NTFS, exFAT, FAT32, ReFS); Turbo applies to the NTFS ones and the rest stay in Standard mode. Each drive's index is saved as a compact binary snapshot, and 4 million entries load in about 1 second.
+
+Turbo tries three ways of reading the MFT, fastest first, and falls back automatically:
+
+1. **Raw `$MFT` read.** Sequential 4 MB reads straight from the volume, with names, sizes and dates in one pass. This is used unless the MFT is fragmented across extension records.
+2. **Per-record reads with `FSCTL_GET_NTFS_FILE_RECORD`.** Several threads, one call per in-use record, still in one pass. This is used when raw volume reads are blocked; on the development PC, security software refuses them on C: with Win32 error 50.
+3. **`FSCTL_ENUM_USN_DATA`.** This returns names only, and sizes and dates are filled in afterwards.
+
+Turbo lists each hard-linked file under one of its names (as Everything does), while Standard mode lists every link. A freshly formatted NTFS volume has no change journal; Turbo creates a 64 MB one so live updates and the deletion log work there too.
+
+If a live-update loop ever fails, FileHound says so and re-indexes the drive (at most once per ten minutes) instead of quietly going stale.
+
+## Privacy & safety
+
+- **Nothing leaves the machine.** No telemetry, no network calls from the app. The only download FileHound ever triggers is the installer fetching the .NET runtime from Microsoft when it is missing. Hashes and manifests are written only to the destination folder you chose.
+- **Least privilege by default.** The exe runs as a normal user (`asInvoker`). Elevation happens only when you click *Enable Turbo*, and it is one approval per launch.
+- **Elevated, but not for what you open.** When FileHound runs elevated it opens files and Properties through the normal desktop shell, so nothing you launch from it inherits admin rights. Drag-out is disabled while elevated, because Windows blocks dragging from an elevated app into a normal one.
+- **Read-only recovery.** While the Recovery page is open on a drive, FileHound stops writing to it: no snapshot saves, no deletion-log saves. All raw reads go through read-only handles; the reader class exposes no write API. The one exception is *Freeze this drive now*, which says so and defaults to Cancel.
+- **Different-drive rule.** Anything recovered (as opposed to restored in place) must go to a folder on another volume, so a recovery can never overwrite the data it is recovering. The page refuses a destination on the source volume.
+- **Consent before the first deep scan.** The page explains once what a deep scan reads (all free space, including other accounts' deleted data), the SSD caveat, and why to use the PC as little as possible meanwhile.
+- **Recovered programs are marked.** Carved `.exe`/`.dll`/scripts get the Mark-of-the-Web, so SmartScreen treats them as downloads rather than trusted local files.
+- **Your data stays yours.** Everything is in `%LOCALAPPDATA%\FileHound` (see the [FAQ](#faq)); the uninstaller keeps your settings and deletion logs unless you delete the folder.
+
+## Build & contribute
+
+Requirements: Windows 10/11 and any [.NET 10 SDK](https://dotnet.microsoft.com/download). People who only run the published `FileHound.exe` need no .NET at all.
 
 The quickest route is the bootstrap script. It installs the .NET 10 SDK if it is missing (winget first, Microsoft's per-user `dotnet-install` script as a fallback), then builds:
 
@@ -139,53 +175,50 @@ The quickest route is the bootstrap script. It installs the .NET 10 SDK if it is
 .\build.ps1                 # check/install the SDK, build
 .\build.ps1 -Test           # ...and run the tests
 .\build.ps1 -Test -Install  # ...and publish FileHound.exe, install it for this user, add a Start Menu shortcut
+.\build.ps1 -Installer      # build release\FileHound-Setup-v<version>.exe (needs Inno Setup 6: winget install JRSoftware.InnoSetup)
+.\build.ps1 -NoInstallSdk   # fail instead of installing the SDK when it is missing
 ```
 
 Or by hand:
 
 ```bash
 dotnet build FileHound.sln -c Release
-```
-
-```bash
+dotnet test FileHound.sln -c Release
 dotnet run --project src/FileHound.App -c Release
 ```
 
-```bash
-dotnet test FileHound.sln -c Release
-```
-
-To publish a self-contained single-file executable:
+To publish the self-contained single-file executable:
 
 ```bash
 dotnet publish src/FileHound.App -c Release -r win-x64 --self-contained -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -o publish
 ```
+
+Two test categories are opt-in: `Perf` is a wall-clock budget tuned for a desktop, and `Elevated` tests format a throwaway VHDX and touch the real C: drive as administrator (CI excludes both with `--filter "Category!=Perf&Category!=Elevated"`).
+
+### Headless tools
+
+```bash
+dotnet run --project tools/FileHound.Cli -c Release -- scan C D --fresh
+dotnet run --project tools/FileHound.Cli -c Release -- search "qrtrly report" --top 10
+dotnet run --project tools/FileHound.Cli -c Release -- bench "report" "ext:pdf invoice" "size:>1gb"
+dotnet run --project tools/FileHound.Cli -c Release -- recovery-probe   # which raw-read paths work on a drive
+```
+
+The app has a QA mode that renders every page and Recovery tab to PNG: `FileHound.exe --snapshot <dir> [--query text] [--drives C] [--data dir]`. The screenshots in this README come from it, taken against a throwaway "Demo" volume so no personal files appear: [`tools/screenshots/demo-shots.ps1`](tools/screenshots/demo-shots.ps1) (run as administrator) creates the VHD, fills it with made-up documents and pictures, deletes some of them three different ways, captures every page, and detaches the volume again.
 
 ### Releasing
 
 Releases are built by GitHub Actions ([`.github/workflows/release.yml`](.github/workflows/release.yml)). Set `<Version>` in `Directory.Build.props`, add a `### x.y.z` section under [Changelog](#changelog), commit, then push a matching tag:
 
 ```bash
-git tag -a v1.2.0 -m "FileHound 1.2.0" && git push origin main --follow-tags
+git tag -a v1.4.2 -m "FileHound 1.4.2" && git push origin main --follow-tags
 ```
 
-The workflow builds, runs the tests, publishes the self-contained exe, and attaches `FileHound.exe`, the zip and `SHA256SUMS.txt` to a release whose notes come from that changelog section. It fails if the tag and `<Version>` disagree. Running it by hand (Actions → Release → Run workflow) builds the same files as a workflow artifact; tick *draft_release* to also rehearse the release step as a draft, which you then delete.
+The workflow builds, runs the tests, publishes the self-contained exe and the framework-dependent build, compiles the installer, and attaches `FileHound-Setup-v<version>.exe`, `FileHound.exe`, the zip and `SHA256SUMS.txt` to a release whose notes come from that changelog section. It fails if the tag and `<Version>` disagree. Running it by hand (Actions → Release → Run workflow) builds the same files as a workflow artifact; tick *draft_release* to also rehearse the release step as a draft, which you then delete.
 
-### Headless tools
+### Contributing
 
-```bash
-dotnet run --project tools/FileHound.Cli -c Release -- scan C D --fresh
-```
-
-```bash
-dotnet run --project tools/FileHound.Cli -c Release -- search "qrtrly report" --top 10
-```
-
-```bash
-dotnet run --project tools/FileHound.Cli -c Release -- bench "report" "ext:pdf invoice" "size:>1gb"
-```
-
-The app also has a QA mode that renders every page to PNG: `FileHound.exe --snapshot <dir> [--query text] [--drives C] [--data dir]`.
+Issues and pull requests are welcome at [github.com/Aldiharley/filehound](https://github.com/Aldiharley/filehound/issues). Before opening a PR, run `.\build.ps1 -Test`; the history uses conventional-commit prefixes (`feat(indexing):`, `fix(app):`, `docs:`). Design docs live in [`docs/superpowers/specs`](docs/superpowers/specs), the implementation plans in [`docs/superpowers/plans`](docs/superpowers/plans), and background research in [`docs/research`](docs/research). Reading the spec for the area you are touching first saves everyone a review round.
 
 ## Architecture
 
@@ -201,13 +234,43 @@ FileHound.App        WPF + CommunityToolkit.Mvvm: clay theme, Dashboard / Search
 tools/FileHound.Cli  headless scan / search / bench / recovery-probe
 ```
 
-Design docs live in [`docs/superpowers/specs`](docs/superpowers/specs), the implementation plan in [`docs/superpowers/plans`](docs/superpowers/plans), and background research in [`docs/research`](docs/research).
+## FAQ
+
+**Windows says "Windows protected your PC" when I run it.**
+The downloads are not code-signed, so SmartScreen has no reputation for them. Click **More info → Run anyway**. Verify the file first if you like: compare `Get-FileHash .\FileHound.exe -Algorithm SHA256` with `SHA256SUMS.txt` from the same release.
+
+**Why does Turbo need administrator rights?**
+Turbo reads the NTFS master file table and the USN change journal directly instead of walking folders. Windows only hands out those raw volume handles to elevated processes. FileHound asks once per launch when you click *Enable Turbo*, relaunches itself elevated, and still opens files through the normal desktop shell so nothing you open inherits admin rights. Standard mode works without any of this; it is just slower on big disks.
+
+**Recently deleted is empty on my new or freshly formatted drive. Is something wrong?**
+No. That tab is built from the drive's change journal, and a new journal has no history to backfill. A freshly formatted NTFS volume has no journal at all; Turbo creates one (64 MB), so from that point on deletions are logged. On a long-used drive the backfill reaches as far as the journal does, which on a busy system drive is typically hours to days. If the tab says "Still indexing" or "indexed in Standard mode", it tells you why and fills in by itself once Turbo has finished with that drive.
+
+**A file I deleted a minute ago shows *Zeroed*. Why?**
+On SSDs, Windows tells the drive to discard deleted data within seconds (TRIM). The file's record and name are still in the MFT, but the clusters read back as zeros; no copy of it exists on this drive. Check Previous versions (if the drive has shadow copies) or a backup. This is why the deep-scan consent card asks you to use the PC as little as possible after an accidental delete.
+
+**Ctrl+Alt+Space does nothing, or opens something else.**
+Another app registered the same shortcut first. FileHound then picks the first free alternative (usually **Ctrl+Shift+Space**); **Settings → Global hotkey** shows the active combination with a status line, and you can click the box and press any other combination to change it.
+
+**Where does FileHound keep its data?**
+`%LOCALAPPDATA%\FileHound`: `settings.json` (settings and recent searches), `index\*.fhx` (one snapshot per drive, rebuildable), `recovery\*.dlog` (deletion logs, last 50,000 deletions per drive) and `logs\`. Settings → About has *Open logs folder* and *Open index folder* buttons. Nothing is written anywhere else except the recovery destination you choose.
+
+**How do I uninstall it completely?**
+Installer: Settings → Apps → FileHound → Uninstall. That removes the program, the shortcuts, the start-with-Windows entry and the rebuildable `index\` and `logs\` folders, and keeps `settings.json` and the deletion logs for a reinstall; delete `%LOCALAPPDATA%\FileHound` to remove those too. Portable exe: turn off *Start with Windows* in Settings if you had enabled it, exit FileHound from the tray, then delete the exe and that folder.
+
+**Does it search inside files?**
+No. FileHound indexes names, paths, sizes, dates and attributes, not contents. Full-text search, network shares and a background indexing service are out of scope for now.
 
 ## Changelog
 
+### 1.4.2
+
+- **Recently deleted** now reports a file moved to the Recycle Bin from the journal's history under its original name and folder (`Notes.txt` in `Documents`, not `$R1A2B3C.txt`), and checks whether a deleted file's record is still free by reading the record itself, so the grade is right on drives where the file-record FSCTL is not available.
+- Rows with an unknown size show nothing instead of an ellipsis that looked like loading, and the recovery bar's hint no longer runs under the selection summary.
+- README rewritten; screenshots are rendered against a throwaway demo volume by `tools\screenshots\demo-shots.ps1`.
+
 ### 1.4.1
 
-- **Windows installer.** `FileHound-Setup-v<version>.exe` installs FileHound per user (or for all users) with a Start Menu entry, optional desktop shortcut and *Start with Windows*, and uninstalls from Settings → Apps. It ships the small framework-dependent build; when the .NET 10 Desktop Runtime is missing it downloads Microsoft's installer (~60 MB) and runs it first. The portable self-contained `FileHound.exe` is unchanged. Build it yourself with `.uild.ps1 -Installer` (Inno Setup 6).
+- **Windows installer.** `FileHound-Setup-v<version>.exe` installs FileHound per user (or for all users) with a Start Menu entry, optional desktop shortcut and *Start with Windows*, and uninstalls from Settings → Apps. It ships the small framework-dependent build; when the .NET 10 Desktop Runtime is missing it downloads Microsoft's installer (~60 MB) and runs it first. The portable self-contained `FileHound.exe` is unchanged. Build it yourself with `.\build.ps1 -Installer` (Inno Setup 6).
 
 ### 1.4.0
 
@@ -259,4 +322,4 @@ Initial version: whole-disk indexing in Standard and Turbo modes, fuzzy search w
 
 ## License
 
-Apache-2.0. See [`THIRD-PARTY-NOTICES.md`](THIRD-PARTY-NOTICES.md) for adapted work (fzf scoring, MIT) and packages.
+Apache-2.0. See [`THIRD-PARTY-NOTICES.md`](THIRD-PARTY-NOTICES.md) for adapted work (fzf scoring, MIT; the LZNT1 decoder, written from the MS-XCA description with DiscUtils as reference, MIT) and the NuGet packages.

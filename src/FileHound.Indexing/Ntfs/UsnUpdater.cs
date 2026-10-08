@@ -129,8 +129,9 @@ public sealed class UsnUpdater : IDisposable
             {
                 var read = new ReadUsnJournalDataV1
                 {
-                    StartUsn = cursor, ReasonMask = (uint)(UsnReason.FileDelete | UsnReason.RenameNewName | UsnReason.FileCreate | UsnReason.Close),
-                    ReturnOnlyOnClose = 1, Timeout = 0, BytesToWaitFor = 0, UsnJournalID = journalId, MinMajorVersion = 2, MaxMajorVersion = 3,
+                    StartUsn = cursor, ReasonMask = (uint)(UsnReason.FileDelete | UsnReason.RenameNewName | UsnReason.RenameOldName | UsnReason.FileCreate | UsnReason.Close),
+                    // Every record, not only closed ones: RENAME_OLD_NAME (the name a file had before it left the tree) never carries CLOSE.
+                    ReturnOnlyOnClose = 0, Timeout = 0, BytesToWaitFor = 0, UsnJournalID = journalId, MinMajorVersion = 2, MaxMajorVersion = 3,
                 };
                 if (!Kernel32.DeviceIoControl(h, Kernel32.FSCTL_READ_USN_JOURNAL, &read, sizeof(ReadUsnJournalDataV1), buffer, BufferSize, out int returned, 0)) break;
                 long next = *(long*)buffer;
@@ -143,8 +144,11 @@ public sealed class UsnUpdater : IDisposable
         finally { NativeMemory.Free(buffer); }
     }
 
+    /// <summary>The RENAME_OLD_NAME half of a rename seen during replay: the name and folder a file had before it left the tree.</summary>
+    private readonly Dictionary<long, (string Name, long Parent)> _replayOldNames = [];
+
     /// <summary>History replay: raise <see cref="Deleted"/> for deletes and leaves-tree renames without touching the index.</summary>
-    private void ReplayDeletions(ReadOnlySpan<byte> records, long stopUsn)
+    internal void ReplayDeletions(ReadOnlySpan<byte> records, long stopUsn)
     {
         // Write lock (not read): RaiseDeleted/NoteReplacement mutate _recentDeletes, and two replays may overlap.
         _index.Lock.EnterWriteLock();
@@ -154,6 +158,15 @@ public sealed class UsnUpdater : IDisposable
             {
                 records = records[rec.Length..];
                 if (rec.Usn >= stopUsn) return;
+                if ((rec.Reason & UsnReason.RenameOldName) != 0 && (rec.Reason & UsnReason.RenameNewName) == 0)
+                {
+                    // Remember where the file was; the matching RENAME_NEW_NAME record follows and only knows the destination.
+                    _replayOldNames[rec.RecordNo] = (rec.Name.ToString(), rec.ParentRecordNo);
+                    if (_replayOldNames.Count > 4096) _replayOldNames.Clear();
+                    continue;
+                }
+                // Reasons accumulate until the handle closes; only the closed record is the complete story of the change.
+                if ((rec.Reason & UsnReason.Close) == 0) continue;
                 int parent = rec.ParentRecordNo == RootRecord ? VolumeIndex.RootEntry : _index.FindByRecord(rec.ParentRecordNo);
                 bool parentIndexed = parent == VolumeIndex.RootEntry || _index.IsLive(parent);
                 if ((rec.Reason & UsnReason.FileDelete) != 0)
@@ -165,7 +178,16 @@ public sealed class UsnUpdater : IDisposable
                 else if ((rec.Reason & UsnReason.RenameNewName) != 0)
                 {
                     var leaving = ClassifyLeaving(rec, parent, parentIndexed);
-                    if (leaving is { } kind) RaiseDeleted(rec, -1, -1, false, kind);
+                    if (leaving is { } kind)
+                    {
+                        if (_replayOldNames.Remove(rec.RecordNo, out var old))
+                        {
+                            int oldParent = old.Parent == RootRecord ? VolumeIndex.RootEntry : _index.FindByRecord(old.Parent);
+                            bool oldParentIndexed = oldParent == VolumeIndex.RootEntry || _index.IsLive(oldParent);
+                            RaiseDeleted(rec, -1, oldParent, oldParentIndexed, kind, old.Name);
+                        }
+                        else RaiseDeleted(rec, -1, -1, false, kind);
+                    }
                 }
                 else if ((rec.Reason & UsnReason.FileCreate) != 0) NoteReplacement(rec);
             }
@@ -259,7 +281,7 @@ public sealed class UsnUpdater : IDisposable
     /// Builds the deletion notification from the index entry (if still indexed) before it is removed.
     /// The parent path is the entry's own parent when known; otherwise the USN record's parent, when that is indexed.
     /// </summary>
-    private void RaiseDeleted(in UsnRecord rec, int e, int usnParent, bool usnParentIndexed, DeletionKind kind)
+    private void RaiseDeleted(in UsnRecord rec, int e, int usnParent, bool usnParentIndexed, DeletionKind kind, string? nameOverride = null)
     {
         var handler = Deleted;
         string name;
@@ -276,7 +298,7 @@ public sealed class UsnUpdater : IDisposable
         }
         else
         {
-            name = rec.Name.ToString();
+            name = nameOverride ?? rec.Name.ToString();
             if (usnParentIndexed) parentPath = usnParent == VolumeIndex.RootEntry ? _index.Root : PathBuilder.GetFullPath(_index, usnParent);
         }
         if (kind == DeletionKind.Deleted && !isDir)

@@ -30,24 +30,60 @@ public static class SnapshotMode
             Save(window, Path.Combine(outDir, $"{page.ToString().ToLowerInvariant()}.png"));
             if (page == AppPage.Recovery)
             {
-                vm.Recovery.CurrentTab = ViewModels.Recovery.RecoveryTab.Deleted;
-                await Task.Delay(1200);
-                await window.Dispatcher.InvokeAsync(() => { }, DispatcherPriority.ApplicationIdle);
+                var rec = vm.Recovery;
+                async Task Settle(int ms = 800)
+                {
+                    await Task.Delay(ms);
+                    await window.Dispatcher.InvokeAsync(() => { }, DispatcherPriority.ApplicationIdle);
+                }
+                async Task WaitUntil(Func<bool> done, int timeoutMs = 60_000)
+                {
+                    for (int i = 0; i < timeoutMs / 200 && !done(); i++) await Task.Delay(200);
+                }
+                // Recycle Bin and the deletion log load on their own; re-save the first capture once they have.
+                await WaitUntil(() => !rec.RecycleBin.IsLoading && !rec.Deleted.IsLoading);
+                await Settle();
+                Save(window, Path.Combine(outDir, "recovery.png"));
+                rec.CurrentTab = ViewModels.Recovery.RecoveryTab.Deleted;
+                await Settle(1200);
                 Save(window, Path.Combine(outDir, "recovery-deleted.png"));
-                vm.Recovery.CurrentTab = ViewModels.Recovery.RecoveryTab.Undelete;
-                await Task.Delay(800);
-                await window.Dispatcher.InvokeAsync(() => { }, DispatcherPriority.ApplicationIdle);
+
+                // Undelete: run the scan when Turbo allows it, so the capture shows graded rows.
+                rec.CurrentTab = ViewModels.Recovery.RecoveryTab.Undelete;
+                if (rec.Undelete.IsAvailable)
+                {
+                    _ = rec.Undelete.ScanCommand.ExecuteAsync(null);
+                    await WaitUntil(() => rec.Undelete.HasScanned || rec.Undelete.Error is not null);
+                    if (rec.Undelete.Items.Count > 0) rec.Undelete.Items[0].IsSelected = true;
+                }
+                await Settle();
                 Save(window, Path.Combine(outDir, "recovery-undelete.png"));
-                vm.Recovery.CurrentTab = ViewModels.Recovery.RecoveryTab.PreviousVersions;
-                vm.Recovery.Versions.Path = @"C:\Windows\System32\drivers\etc\hosts";
-                await Task.Delay(800);
-                await window.Dispatcher.InvokeAsync(() => { }, DispatcherPriority.ApplicationIdle);
+
+                rec.CurrentTab = ViewModels.Recovery.RecoveryTab.PreviousVersions;
+                rec.Versions.Path = rec.SelectedDrive is { } d ? $@"{d.Letter}:\Documents" : @"C:\Windows\System32\drivers\etc\hosts";
+                await Settle();
                 Save(window, Path.Combine(outDir, "recovery-versions.png"));
-                vm.Recovery.CurrentTab = ViewModels.Recovery.RecoveryTab.DeepScan;
-                await Task.Delay(800);
-                await window.Dispatcher.InvokeAsync(() => { }, DispatcherPriority.ApplicationIdle);
-                Save(window, Path.Combine(outDir, "recovery-deepscan.png"));
-                vm.Recovery.CurrentTab = ViewModels.Recovery.RecoveryTab.RecycleBin;
+
+                // Deep scan: the first Scan shows the consent card; after consent, the scan runs and the first image is previewed.
+                rec.CurrentTab = ViewModels.Recovery.RecoveryTab.DeepScan;
+                if (rec.DeepScan.IsAvailable)
+                {
+                    await rec.DeepScan.ScanCommand.ExecuteAsync(null);
+                    await Settle();
+                    Save(window, Path.Combine(outDir, "recovery-deepscan-consent.png"));
+                    if (rec.DeepScan.NeedsConsent) _ = rec.DeepScan.ConsentCommand.ExecuteAsync(null);
+                    await WaitUntil(() => rec.DeepScan.HasScanned || rec.DeepScan.Error is not null, 300_000);
+                    var image = rec.DeepScan.Items.FirstOrDefault(i => i.Candidate.Key is FileHound.Indexing.Recovery.CarvedFile f && f.Type.Category == FileHound.Core.Index.FileCategory.Image);
+                    if (image is not null) { rec.DeepScan.PreviewItem = image; image.IsSelected = true; }
+                    await Settle(1500);
+                    Save(window, Path.Combine(outDir, "recovery-deepscan.png"));
+                }
+                else
+                {
+                    await Settle();
+                    Save(window, Path.Combine(outDir, "recovery-deepscan.png"));
+                }
+                rec.CurrentTab = ViewModels.Recovery.RecoveryTab.RecycleBin;
             }
         }
         vm.CurrentPage = AppPage.Search;

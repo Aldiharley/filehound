@@ -20,16 +20,16 @@ public sealed partial class DeletedTabViewModel : ObservableObject
     private RecoverySession? _session;
     private List<RecoveryItem> _all = [];
     private CancellationTokenSource? _loadCts;
-    private readonly Func<char, IReadOnlyList<long>, SlotState[]> _slotCheck;
+    private readonly Func<RecoverySession, IReadOnlyList<long>, SlotState[]> _slotCheck;
 
-    /// <param name="slotCheck">Checks a batch of MFT record numbers on one volume handle; the default uses <see cref="JournalGapOracle"/>.</param>
-    public DeletedTabViewModel(Func<char, IReadOnlyList<long>, SlotState[]>? slotCheck = null)
+    /// <param name="slotCheck">Checks a batch of MFT record numbers; the default asks the session (raw record read, FSCTL fallback).</param>
+    public DeletedTabViewModel(Func<RecoverySession, IReadOnlyList<long>, SlotState[]>? slotCheck = null)
     {
         _slotCheck = slotCheck ?? CheckSlots;
     }
 
-    private static SlotState[] CheckSlots(char letter, IReadOnlyList<long> records) =>
-        JournalGapOracle.CheckMany(letter, records).Select(s => s switch
+    private static SlotState[] CheckSlots(RecoverySession session, IReadOnlyList<long> records) =>
+        session.CheckSlots(records).Select(s => s switch
         {
             JournalGapOracle.SlotState.Free => SlotState.Free,
             JournalGapOracle.SlotState.Reused => SlotState.Reused,
@@ -187,9 +187,8 @@ public sealed partial class DeletedTabViewModel : ObservableObject
                 var batch = Items.Concat(_all).Distinct().Where(i => i.Candidate.Key is DeletionLogItem { Slot: SlotState.Pending, Kind: DeletionKind.Deleted }).Take(200).ToList();
                 if (batch.Count == 0) break;
                 var records = batch.Select(i => ((DeletionLogItem)i.Candidate.Key).Entry.RecordNo).ToList();
-                char letter = session.Drive.Letter;
                 SlotState[] states;
-                try { states = await Task.Run(() => _slotCheck(letter, records)); }
+                try { states = await Task.Run(() => _slotCheck(session, records)); }
                 catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { break; }
                 if (cts.IsCancellationRequested) break;
                 for (int i = 0; i < batch.Count; i++)

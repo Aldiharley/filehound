@@ -134,6 +134,45 @@ public class DeletionEventTests
     public void Recycle_bin_data_name_pattern(string name, bool expected) => Assert.Equal(expected, UsnUpdater.IsRecycleBinDataName(name));
 
     [Fact]
+    public void Replayed_recycle_bin_move_keeps_the_original_name_and_folder()
+    {
+        // Journal history: RENAME_OLD_NAME (in Docs, "notes.txt") then RENAME_NEW_NAME (into the unindexed bin as $R…).
+        var (index, docs) = IndexWithDocs();
+        using var u = new UsnUpdater(index, 'Q', TimeSpan.FromSeconds(1));
+        UsnDeletion? got = null;
+        u.Deleted += (_, d) => got = d;
+        byte[] buffer = [
+            .. UsnRecordParserTests.V2(200, 100, "notes.txt", UsnReason.RenameOldName, usn: 10),
+            .. UsnRecordParserTests.V2(200, 31, "$RA1B2C3.txt", UsnReason.RenameNewName | UsnReason.Close, usn: 11),
+        ];
+        u.ReplayDeletions(buffer, stopUsn: long.MaxValue);
+        Assert.NotNull(got);
+        Assert.Equal(DeletionKind.Recycled, got!.Kind);
+        Assert.Equal("notes.txt", got.Name);
+        Assert.Equal(@"Q:\Docs", got.ParentPath);
+        Assert.True(index.IsLive(docs));   // the replay never touches the index
+    }
+
+    [Fact]
+    public void Replay_acts_only_on_closed_records()
+    {
+        // Reasons accumulate until CLOSE: the half-way RENAME_NEW_NAME record must not raise a second deletion.
+        var (index, _) = IndexWithDocs();
+        using var u = new UsnUpdater(index, 'Q', TimeSpan.FromSeconds(1));
+        int raised = 0;
+        u.Deleted += (_, _) => raised++;
+        byte[] buffer = [
+            .. UsnRecordParserTests.V2(200, 100, "notes.txt", UsnReason.RenameOldName, usn: 10),
+            .. UsnRecordParserTests.V2(200, 31, "$RA1B2C3.txt", UsnReason.RenameNewName, usn: 11),
+            .. UsnRecordParserTests.V2(200, 31, "$RA1B2C3.txt", UsnReason.RenameNewName | UsnReason.Close, usn: 12),
+            .. UsnRecordParserTests.V2(201, 100, "x.txt", UsnReason.FileDelete, usn: 13),
+            .. UsnRecordParserTests.V2(201, 100, "x.txt", UsnReason.FileDelete | UsnReason.Close, usn: 14),
+        ];
+        u.ReplayDeletions(buffer, stopUsn: long.MaxValue);
+        Assert.Equal(2, raised);
+    }
+
+    [Fact]
     public void Delete_of_unknown_file_in_unknown_folder_is_not_logged()
     {
         // Emptying the bin deletes $R… files under an unindexed SID folder; they were logged when they left the tree.
@@ -350,6 +389,17 @@ public sealed class RecoverySessionTests : IDisposable
 
 public class JournalGapOracleTests
 {
+    [Fact]
+    public void Raw_record_check_reports_free_reused_and_unknown()
+    {
+        var vol = new SyntheticVolume(clusters: 128, records: 32);
+        vol.SetRecord(20, new MftRecordBuilder().InUse().FileName(5, "live.txt").ResidentData(1).Build());
+        vol.SetRecord(21, new MftRecordBuilder().FileName(5, "gone.txt").ResidentData(1).Build());
+        using var r = vol.OpenReader();
+        var states = JournalGapOracle.CheckMany(r, [20, 21, 5000]);
+        Assert.Equal([JournalGapOracle.SlotState.Reused, JournalGapOracle.SlotState.Free, JournalGapOracle.SlotState.Unknown], states);
+    }
+
     [Fact, Trait("Category", "Elevated")]
     public void Record_16_is_in_use_and_the_mft_tail_has_free_slots()
     {

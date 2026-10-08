@@ -31,6 +31,12 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 ```
 
+## DiscUtils — LZNT1 reference (MIT)
+
+`src/FileHound.Core/Recovery/Lznt1.cs` implements the LZNT1 decompressor from Microsoft's public format description
+(MS-XCA §2.3). DiscUtils' implementation (https://github.com/DiscUtils/DiscUtils, `Library/DiscUtils.Ntfs/LZNT1.cs`,
+MIT, © Kenneth Bell and contributors) was used as a reference for the displacement/length split; no code was copied.
+
 ## NuGet packages
 
 | Package | License | Use |
@@ -38,6 +44,7 @@ THE SOFTWARE.
 | CommunityToolkit.Mvvm | MIT (© .NET Foundation and Contributors) | MVVM source generators |
 | H.NotifyIcon.Wpf | MIT (© havendv) | System tray icon |
 | System.IO.Hashing | MIT (© .NET Foundation and Contributors) | XxHash64 snapshot checksums |
+| System.Management | MIT (© .NET Foundation and Contributors) | Win32_ShadowCopy enumeration and creation (Previous versions) |
 | xunit, Microsoft.NET.Test.Sdk | Apache-2.0 / MIT | Tests only |
 
 ## Artwork

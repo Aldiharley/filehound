@@ -17,7 +17,7 @@ public sealed partial class RecoveryItem : ObservableObject
         Name = candidate.Name;
         Folder = candidate.OriginalFolder ?? "<unknown folder>";
         IsUnknownFolder = candidate.OriginalFolder is null;
-        SizeText = candidate.IsDirectory ? "" : candidate.Size < 0 ? "…" : Formatting.Size(candidate.Size);
+        SizeText = candidate.IsDirectory || candidate.Size < 0 ? "" : Formatting.Size(candidate.Size);   // unknown size: say nothing rather than look like loading
         WhenText = candidate.DeletedUtc is { } d ? Formatting.Modified(d.Ticks, nowUtc) : candidate.ModifiedUtc is { } m ? Formatting.Modified(m.Ticks, nowUtc) : "";
         WhenTooltip = candidate.DeletedUtc is { } dd ? (candidate.Source == RecoverySource.ShadowCopy ? "Snapshot from " : "Deleted ") + dd.ToLocalTime().ToString("f") : "";
         Detail = candidate.Detail ?? "";

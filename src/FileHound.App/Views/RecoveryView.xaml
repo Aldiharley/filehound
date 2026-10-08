@@ -954,10 +954,10 @@
                         </StackPanel>
                     </StackPanel>
 
-                    <!-- Recover tab: destination -->
-                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Visibility="{Binding IsRestoreTab, Converter={StaticResource VisibleWhen}, ConverterParameter=invert}">
-                        <TextBlock Text="Save to" Style="{StaticResource BodyStrong}" VerticalAlignment="Center" Margin="0,0,12,0" />
-                        <Button Command="{Binding PickDestinationCommand}" Cursor="Hand" FocusVisualStyle="{StaticResource ClayFocusVisual}" AutomationProperties.Name="Choose destination folder">
+                    <!-- Recover tab: destination. A DockPanel (not a StackPanel) so the hint gets only the width left over by the right-docked texts. -->
+                    <DockPanel VerticalAlignment="Center" Visibility="{Binding IsRestoreTab, Converter={StaticResource VisibleWhen}, ConverterParameter=invert}">
+                        <TextBlock DockPanel.Dock="Left" Text="Save to" Style="{StaticResource BodyStrong}" VerticalAlignment="Center" Margin="0,0,12,0" />
+                        <Button DockPanel.Dock="Left" Command="{Binding PickDestinationCommand}" Cursor="Hand" FocusVisualStyle="{StaticResource ClayFocusVisual}" AutomationProperties.Name="Choose destination folder">
                             <Button.Template>
                                 <ControlTemplate TargetType="Button">
                                     <Border x:Name="Pill" CornerRadius="17" Height="36" MinWidth="260" Background="{StaticResource Surface}" Padding="14,0" Effect="{StaticResource ClayShadowSmall}">
@@ -979,7 +979,7 @@
                                 </ControlTemplate>
                             </Button.Template>
                         </Button>
-                        <TextBlock FontSize="12" VerticalAlignment="Center" Margin="12,0,0,0" MaxWidth="360" TextWrapping="Wrap">
+                        <TextBlock FontSize="12" VerticalAlignment="Center" Margin="12,0,0,0" MaxWidth="360" HorizontalAlignment="Left" TextWrapping="Wrap" MaxHeight="34" TextTrimming="CharacterEllipsis">
                             <TextBlock.Style>
                                 <Style TargetType="TextBlock" BasedOn="{StaticResource Caption}">
                                     <Setter Property="Foreground" Value="{StaticResource GradeMintInk}" />
@@ -994,7 +994,7 @@
                                 </Style>
                             </TextBlock.Style>
                         </TextBlock>
-                    </StackPanel>
+                    </DockPanel>
                 </DockPanel>
 
                 <!-- progress while recovering -->

@@ -26,7 +26,10 @@ Resize 'hound-cut-cut.png' 'hound-hero.png' 560
 Resize 'hound-sleep-cut.png' 'hound-sleep.png' 480
 Resize 'hound-sniff-cut.png' 'hound-sniff.png' 480
 Resize 'hound-shrug-cut.png' 'hound-shrug.png' 480
-foreach ($icon in 'folder','document','image','video','audio','archive','app','code','drive','paw','clock','search','bolt','gear','star','home') {
+Resize 'hound-dig-cut.png' 'hound-dig.png' 480
+Resize 'hound-found-cut.png' 'hound-found.png' 480
+foreach ($icon in 'folder','document','image','video','audio','archive','app','code','drive','paw','clock','search','bolt','gear','star','home',
+                  'recycle','timeline','undelete','shadow','scan','shield','export') {
     Resize "icon-$icon-cut.png" "icon-$icon.png" 160
 }
 

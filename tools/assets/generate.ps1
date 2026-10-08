@@ -39,6 +39,16 @@ $jobs = [ordered]@{
     'icon-gear'     = @{ ref = $StyleRef; cut = $true; prompt = "$iconStyle A lilac settings gear cog." }
     'icon-star'     = @{ ref = $StyleRef; cut = $true; prompt = "$iconStyle A cute butter yellow star with a tiny happy face." }
     'icon-home'     = @{ ref = $StyleRef; cut = $true; prompt = "$iconStyle A mint little house with a peach roof." }
+    # --- Recovery page (2026-10-08) ---
+    'hound-dig'     = @{ ref = $hero;  cut = $true;  prompt = "$mascotStyle Digging happily in a small mound of pastel brown clay soil with a tiny mint shovel, little puffs of dirt flying, tongue out, excited expression. Full body, centered, plain flat solid cream background (#FBF4EA)." }
+    'hound-found'   = @{ ref = $hero;  cut = $true;  prompt = "$mascotStyle Sitting proudly, holding up a rescued cream envelope-shaped file with a peach ribbon in both front paws, tail up, delighted expression with sparkles. Full body, centered, plain flat solid cream background (#FBF4EA)." }
+    'icon-recycle'  = @{ ref = $StyleRef; cut = $true; prompt = "$iconStyle A pastel mint recycle bin with a cream lid slightly open." }
+    'icon-timeline' = @{ ref = $StyleRef; cut = $true; prompt = "$iconStyle A butter yellow round clock with a small lilac rewind arrow curling around it." }
+    'icon-undelete' = @{ ref = $StyleRef; cut = $true; prompt = "$iconStyle A lilac document page with a chunky mint arrow curving back onto it." }
+    'icon-shadow'   = @{ ref = $StyleRef; cut = $true; prompt = "$iconStyle A periwinkle blue file folder with a faint translucent ghost copy of itself behind it." }
+    'icon-scan'     = @{ ref = $StyleRef; cut = $true; prompt = "$iconStyle A peach magnifying glass hovering over a small grid of pastel dots." }
+    'icon-shield'   = @{ ref = $StyleRef; cut = $true; prompt = "$iconStyle A mint green shield with a cream check mark." }
+    'icon-export'   = @{ ref = $StyleRef; cut = $true; prompt = "$iconStyle A lilac tray with a cream arrow pointing up out of it." }
 }
 
 # Skip assets that already exist so the script can be re-run after failures.

@@ -79,7 +79,8 @@ public partial class App : Application
         var drives = new DrivesViewModel(_manager, elevated, () => RequestTurbo());
         bool hotkeyOk = false;
         var settingsVm = new SettingsViewModel(_settings, Save, g => _hotkey.Register(g), DataDirectory, hotkeyRegistered: true);
-        main = new MainViewModel(_manager, elevated, UserNames.Resolve(_settings.DisplayName)) { Dashboard = dashboard, Search = searchVm, Drives = drives, Settings = settingsVm };
+        var recovery = new ViewModels.Recovery.RecoveryViewModel(_manager, elevated, t => main?.ShowToast(t), () => RequestTurbo());
+        main = new MainViewModel(_manager, elevated, UserNames.Resolve(_settings.DisplayName)) { Dashboard = dashboard, Search = searchVm, Drives = drives, Recovery = recovery, Settings = settingsVm };
         main.TurboRequested += (_, _) => RequestTurbo();
         settingsVm.DisplayNameChanged = name => main.UserName = UserNames.Resolve(name);
         _main = main;

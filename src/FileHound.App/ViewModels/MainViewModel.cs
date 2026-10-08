@@ -6,7 +6,7 @@ using FileHound.App.Services;
 
 namespace FileHound.App.ViewModels;
 
-public enum AppPage { Dashboard, Search, Drives, Settings }
+public enum AppPage { Dashboard, Search, Drives, Recovery, Settings }
 
 public sealed partial class MainViewModel : ObservableObject
 {
@@ -28,6 +28,7 @@ public sealed partial class MainViewModel : ObservableObject
     public required DashboardViewModel Dashboard { get; init; }
     public required SearchViewModel Search { get; init; }
     public required DrivesViewModel Drives { get; init; }
+    public required Recovery.RecoveryViewModel Recovery { get; init; }
     public required SettingsViewModel Settings { get; init; }
 
     public bool IsElevated { get; }
@@ -53,16 +54,20 @@ public sealed partial class MainViewModel : ObservableObject
 
     partial void OnCurrentPageChanged(AppPage value)
     {
+        // Leaving Recovery closes its session so FileHound's own writes to that drive resume.
+        if (CurrentView is Recovery.RecoveryViewModel && value != AppPage.Recovery) Recovery.Deactivate();
         CurrentView = value switch
         {
             AppPage.Search => Search,
             AppPage.Drives => Drives,
+            AppPage.Recovery => Recovery,
             AppPage.Settings => Settings,
             _ => Dashboard,
         };
-        PageTitle = value switch { AppPage.Search => "Search", AppPage.Drives => "Drives", AppPage.Settings => "Settings", _ => "Dashboard" };
+        PageTitle = value switch { AppPage.Search => "Search", AppPage.Drives => "Drives", AppPage.Recovery => "Recovery", AppPage.Settings => "Settings", _ => "Dashboard" };
         if (value == AppPage.Dashboard) Dashboard.Activate();
         if (value == AppPage.Drives) Drives.Refresh();
+        if (value == AppPage.Recovery) Recovery.Activate();
         if (value == AppPage.Search) FocusSearchRequested?.Invoke(this, EventArgs.Empty);
     }
 

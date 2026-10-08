@@ -199,6 +199,7 @@ Design docs live in [`docs/superpowers/specs`](docs/superpowers/specs), the impl
 - **One-time consent** (FR-30) before the first deep scan, remembered in settings.
 - Carved files recover as `type_block.ext` with SHA-256 and byte runs; recovered programs get the Mark-of-the-Web.
 - Every validator is fuzzed in the test suite (random mutations must never throw or report a size past the data).
+- **Fixes.** Snapshot saves of one drive could overlap when several drives finished indexing seconds apart and the second one failed with a sharing violation; saves are now serialised per file. A freshly formatted NTFS volume has no change journal, which silently dropped it to Standard mode; Turbo now creates a 64 MB journal (as Everything does), so live updates and the deletion log work there too. Recently deleted now explains why a drive has no deletion log yet ("Still indexing O: (2%)", Standard mode) instead of asking for administrator access while Turbo is already on, and attaches itself when the log appears.
 
 ### 1.3.0
 

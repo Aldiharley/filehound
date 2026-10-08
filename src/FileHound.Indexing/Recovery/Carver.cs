@@ -12,6 +12,8 @@ public sealed class Carver(VolumeReader reader, ClusterBitmap bitmap)
 {
     private const long MaxWindow = 512L << 20;
     private readonly ManualResetEventSlim _gate = new(true);
+    private byte[]? _grown;
+    private CancellationToken _ct;
 
     /// <summary>Clusters per read (default 4 MB worth).</summary>
     public int ChunkClusters { get; init; } = Math.Max(1, (4 << 20) / reader.Geometry.BytesPerCluster);
@@ -52,6 +54,7 @@ public sealed class Carver(VolumeReader reader, ClusterBitmap bitmap)
         int cluster = reader.Geometry.BytesPerCluster;
         var runs = FreeRuns(bitmap).ToList();
         long freeBytes = runs.Sum(r => r.Clusters) * cluster;
+        _ct = ct;
         var found = new List<CarvedFile>();
         var pending = new List<CarvedFile>();
         var chunkBuffer = new byte[(long)ChunkClusters * cluster];
@@ -114,22 +117,39 @@ public sealed class Carver(VolumeReader reader, ClusterBitmap bitmap)
             foreach (var type in list)
             {
                 if (!type.MatchesMagic(head)) continue;
-                var r = type.Validate(head[..Math.Min(head.Length, (int)Math.Min(type.MaxSize, availableInChunk))]);
-                long window = availableInChunk;
+                long window = Math.Min(availableInChunk, type.MaxSize);
+                var r = Validate(type, head[..(int)window]);
                 long limit = Math.Min(Math.Min(type.MaxSize, remainingBytes), MaxWindow);
-                byte[]? grown = null;
                 while (r.Status == CarveStatus.NeedMore && window < limit)
                 {
-                    window = Math.Min(limit, Math.Max(window * 2, (long)cluster * 64));
+                    // A format that states its total size gets exactly that; otherwise double. Past the limit, give up on growing.
+                    if (r.Required > limit) break;
+                    _ct.ThrowIfCancellationRequested();
+                    _gate.Wait(_ct);
+                    window = r.Required > window ? r.Required : Math.Min(limit, Math.Max(window * 2, (long)cluster * 64));
+                    window = Math.Min(window, limit);
                     int clusters = (int)((window + cluster - 1) / cluster);
-                    if (grown is null || grown.Length < clusters * (long)cluster) grown = new byte[(long)clusters * cluster];
-                    reader.ReadClusters(run.Lcn + index, clusters, grown);
-                    r = type.Validate(grown.AsSpan(0, (int)Math.Min(window, (long)clusters * cluster)));
+                    if (_grown is null || _grown.Length < clusters * (long)cluster) _grown = new byte[(long)clusters * cluster];
+                    reader.ReadClusters(run.Lcn + index, clusters, _grown);
+                    r = Validate(type, _grown.AsSpan(0, (int)Math.Min(window, (long)clusters * cluster)));
                 }
-                if (r.Status == CarveStatus.Ok && r.Size > 0 && r.Size <= remainingBytes)
+                // Open-ended formats (MP3, FLAC, linearized PDF…) report the valid prefix; when nothing more can be read, that is the file.
+                if (r.Status == CarveStatus.NeedMore && r.Size > 0 && window >= limit) r = CarveResult.Ok(r.Size, r.Info);
+                if (r.Status == CarveStatus.Ok && r.Size > 0 && r.Size <= window && r.Size <= remainingBytes)
                     return new CarvedFile(type, run.Lcn + index, r.Size, r.Info);
             }
         }
         return null;
+    }
+
+    /// <summary>Validators are contracted never to throw; a bug in one must not end the scan, so a throw is a reject.</summary>
+    private static CarveResult Validate(CarveType type, ReadOnlySpan<byte> data)
+    {
+        try { return type.Validate(data); }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            IndexManager.Log?.Invoke($"Validator {type.Id} threw {ex.GetType().Name}: {ex.Message}");
+            return CarveResult.Reject;
+        }
     }
 }

@@ -27,6 +27,12 @@ public sealed partial class DeepScanTabViewModel : ObservableObject
     private CancellationTokenSource? _cts;
     private FileCategory? _category;
     private DeepScanSort _sort = DeepScanSort.Type;
+    private readonly System.Diagnostics.Stopwatch _sinceApply = System.Diagnostics.Stopwatch.StartNew();
+    private bool _applyPending;
+    private int _previewVersion;
+
+    /// <summary>The scan in flight, so the session is closed only after it has let go of the reader.</summary>
+    public Task? ScanTask { get; private set; }
 
     public DeepScanTabViewModel(Func<bool> consented, Action markConsented, Scanner? scanner = null, Func<RecoverySession?, CarvedFile, PreviewContent?>? preview = null)
     {
@@ -78,9 +84,18 @@ public sealed partial class DeepScanTabViewModel : ObservableObject
 
     partial void OnIsPausedChanged(bool value) => OnPropertyChanged(nameof(PauseResumeText));
 
-    partial void OnPreviewItemChanged(RecoveryItem? value)
+    partial void OnPreviewItemChanged(RecoveryItem? value) => _ = LoadPreviewAsync(value);
+
+    /// <summary>Reads and decodes off the UI thread; a newer selection wins.</summary>
+    private async Task LoadPreviewAsync(RecoveryItem? value)
     {
-        Preview = value?.Candidate.Key is CarvedFile f ? _previewBuilder(_session, f) : null;
+        int version = ++_previewVersion;
+        if (value?.Candidate.Key is not CarvedFile f) { Preview = null; return; }
+        var session = _session;
+        PreviewContent? content;
+        try { content = await Task.Run(() => _previewBuilder(session, f)); }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ObjectDisposedException or ArgumentOutOfRangeException) { content = null; }
+        if (version == _previewVersion) Preview = content;
     }
 
     public Task LoadAsync(RecoverySession? session)
@@ -161,21 +176,23 @@ public sealed partial class DeepScanTabViewModel : ObservableObject
             {
                 if (!ReferenceEquals(_cts, cts)) return;
                 foreach (var c in found) _all.Add(Wrap(c, now));
-                Apply();
+                ApplyThrottled();
             }
             var dispatcher = Application.Current?.Dispatcher;
             if (dispatcher is null || dispatcher.CheckAccess()) Add(); else dispatcher.InvokeAsync(Add);
         }
         try
         {
-            var found = await _scanner(session, null, progress, OnBatch, cts.Token);
+            var scan = _scanner(session, null, progress, OnBatch, cts.Token);
+            ScanTask = scan;
+            var found = await scan;
             if (cts.IsCancellationRequested) return;
             // The batches already delivered everything; rebuild from the full list to be exact.
             _all = found.Select(c => Wrap(c, now)).ToList();
             HasScanned = true;
             Apply();
         }
-        catch (OperationCanceledException) { HasScanned = _all.Count > 0; }
+        catch (OperationCanceledException) { HasScanned = _all.Count > 0; Apply(); }
         catch (ObjectDisposedException) { }
         catch (Exception ex)
         {
@@ -186,6 +203,7 @@ public sealed partial class DeepScanTabViewModel : ObservableObject
         {
             // Reset unless a newer scan has already replaced this one (Stop clears the field, so null counts as "this one").
             if (_cts is null || ReferenceEquals(_cts, cts)) { IsScanning = false; IsPaused = false; ProgressText = ""; }
+            ScanTask = null;
         }
     }
 
@@ -196,7 +214,11 @@ public sealed partial class DeepScanTabViewModel : ObservableObject
         {
             item.TypeBrush = Theme.ForCategory(f.Type.Category);
             var session = _session;
-            item.ThumbnailLoader = () => session is null ? null : PreviewService.Thumbnail(session.Reader, f);
+            item.ThumbnailLoader = () =>
+            {
+                try { return session is null ? null : PreviewService.Thumbnail(session.Reader, f); }
+                catch (Exception ex) when (ex is ObjectDisposedException or NotSupportedException or IOException) { return null; }
+            };
         }
         item.PropertyChanged += (_, e) => { if (e.PropertyName == nameof(RecoveryItem.IsSelected)) SelectionChanged?.Invoke(this, EventArgs.Empty); };
         return item;
@@ -225,8 +247,25 @@ public sealed partial class DeepScanTabViewModel : ObservableObject
         Apply();
     }
 
+    /// <summary>During a scan, batches arrive faster than the list can be rebuilt: refresh at most twice a second.</summary>
+    private void ApplyThrottled()
+    {
+        if (_sinceApply.ElapsedMilliseconds < 500)
+        {
+            if (_applyPending) return;
+            _applyPending = true;
+            var dispatcher = Application.Current?.Dispatcher;
+            if (dispatcher is null) { _applyPending = false; Apply(); return; }
+            _ = Task.Delay(500).ContinueWith(_ => dispatcher.InvokeAsync(() => { _applyPending = false; Apply(); }), TaskScheduler.Default);
+            return;
+        }
+        Apply();
+    }
+
     private void Apply()
     {
+        _sinceApply.Restart();
+        var keep = PreviewItem;
         IEnumerable<RecoveryItem> shown = _all;
         if (_category is { } cat) shown = shown.Where(i => i.Candidate.Key is CarvedFile f && f.Type.Category == cat);
         shown = _sort switch
@@ -239,6 +278,7 @@ public sealed partial class DeepScanTabViewModel : ObservableObject
         foreach (var i in shown) Items.Add(i);
         Count = _all.Count;
         IsEmpty = HasScanned && _all.Count == 0;
+        if (keep is not null && Items.Contains(keep) && !ReferenceEquals(PreviewItem, keep)) PreviewItem = keep;   // Clear() dropped the selection
     }
 
     public IReadOnlyList<RecoveryItem> Selected => _all.Where(i => i.IsSelected).ToList();

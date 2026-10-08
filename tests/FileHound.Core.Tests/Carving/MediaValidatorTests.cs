@@ -6,7 +6,7 @@ namespace FileHound.Core.Tests.Carving;
 public class MediaValidatorTests
 {
     // ---- builders -------------------------------------------------------------------------------------------------
-    internal static byte[] Wav(int dataBytes)
+    public static byte[] Wav(int dataBytes)
     {
         var b = new byte[44 + dataBytes];
         "RIFF"u8.CopyTo(b);
@@ -36,7 +36,7 @@ public class MediaValidatorTests
         return b;
     }
 
-    internal static byte[] Mp4()
+    public static byte[] Mp4()
     {
         var mvhd = new byte[8 + 100];
         BinaryPrimitives.WriteUInt32BigEndian(mvhd, 108);
@@ -59,7 +59,7 @@ public class MediaValidatorTests
         return b;
     }
 
-    internal static byte[] Mkv()
+    public static byte[] Mkv()
     {
         byte[] ebmlHeader = [0x1A, 0x45, 0xDF, 0xA3, .. Vint(4, 1), 0x42, 0x86, 0x81, 0x01];           // EBMLVersion = 1
         byte[] timecodeScale = [0x2A, 0xD7, 0xB1, 0x83, 0x0F, 0x42, 0x40];                            // 1,000,000
@@ -72,7 +72,7 @@ public class MediaValidatorTests
         return [.. ebmlHeader, .. segment];
     }
 
-    internal static byte[] Ogg(int pages)
+    public static byte[] Ogg(int pages)
     {
         var ms = new MemoryStream();
         for (int i = 0; i < pages; i++)
@@ -87,7 +87,7 @@ public class MediaValidatorTests
         return ms.ToArray();
     }
 
-    internal static byte[] Mp3(int frames, bool withId3 = true)
+    public static byte[] Mp3(int frames, bool withId3 = true, bool withTag = false)
     {
         var ms = new MemoryStream();
         if (withId3) ms.Write([(byte)'I', (byte)'D', (byte)'3', 3, 0, 0, 0, 0, 0, 20, .. new byte[20]]);
@@ -98,10 +98,11 @@ public class MediaValidatorTests
             f[0] = 0xFF; f[1] = 0xFB; f[2] = 0x90; f[3] = 0x00;
             ms.Write(f);
         }
+        if (withTag) { var tag = new byte[128]; "TAG"u8.CopyTo(tag); ms.Write(tag); }
         return ms.ToArray();
     }
 
-    internal static byte[] Flac(int frames)
+    public static byte[] Flac(int frames)
     {
         var ms = new MemoryStream();
         ms.Write("fLaC"u8);
@@ -129,14 +130,15 @@ public class MediaValidatorTests
         ["mp4", Mp4(), "1280×720 · 1:30"],
         ["mkv", Mkv(), "2:05"],
         ["ogg", Ogg(3), null!],
-        ["mp3", Mp3(6), "128 kbps · 44.1 kHz"],
+        ["mp3", Mp3(6, withTag: true), "128 kbps · 44.1 kHz"],
     ];
 
     [Theory, MemberData(nameof(Samples))]
     public void Valid_file_reports_exact_size_and_info(string id, byte[] file, string? info)
     {
         var r = Signatures.ById(id)!.Validate(file);
-        Assert.Equal(CarveStatus.Ok, r.Status);
+        // A container with no terminator (MP4) that ends exactly at the span end is a valid prefix that may continue.
+        Assert.True(r.Status == CarveStatus.Ok || (id == "mp4" && r.Status == CarveStatus.NeedMore), r.Status.ToString());
         Assert.Equal(file.Length, r.Size);
         Assert.Equal(info, r.Info);
     }
@@ -161,23 +163,49 @@ public class MediaValidatorTests
     [Fact]
     public void Mp3_ends_at_the_last_whole_frame_and_includes_an_id3v1_tag()
     {
-        var file = Mp3(5);
-        var withTag = new byte[file.Length + 128];
-        file.CopyTo(withTag, 0);
-        "TAG"u8.CopyTo(withTag.AsSpan(file.Length));
-        Assert.Equal(withTag.Length, MediaValidators.Mp3([.. withTag, 0x00, 0x11]).Size);
+        var file = Mp3(5, withTag: true);
+        Assert.Equal(file.Length, MediaValidators.Mp3([.. file, 0x00, 0x11]).Size);
         Assert.Equal(CarveStatus.NeedMore, MediaValidators.Mp3(Mp3(2, withId3: false)).Status);   // fewer than four frames so far
         Assert.Equal(CarveStatus.Reject, MediaValidators.Mp3([0xFF, 0xFB, 0x90, 0x00, .. new byte[413], 0x00, 0x00, 0x00, 0x00]).Status);
+    }
+
+    [Fact]
+    public void Open_ended_streams_report_the_valid_prefix_and_ask_for_more()
+    {
+        // An MP3 cut mid-frame: everything up to the last whole frame is usable, but the carver should read on.
+        var mp3 = Mp3(8, withId3: false);
+        var r = MediaValidators.Mp3(mp3.AsSpan(0, mp3.Length - 100));
+        Assert.Equal(CarveStatus.NeedMore, r.Status);
+        Assert.Equal(417 * 7, r.Size);
+        // A FLAC whose last frame runs to the span end.
+        var flac = Flac(4);
+        var f = MediaValidators.Flac(flac);
+        Assert.Equal(CarveStatus.NeedMore, f.Status);
+        Assert.True(f.Size > 0 && f.Size < flac.Length);
+        // A WAV that states its size asks for exactly that.
+        var wav = Wav(100_000);
+        var w = MediaValidators.Riff(wav.AsSpan(0, 5000));
+        Assert.Equal(CarveStatus.NeedMore, w.Status);
+        Assert.Equal(wav.Length, w.Required);
+    }
+
+    [Fact]
+    public void Hostile_riff_chunk_length_is_rejected_not_thrown()
+    {
+        var wav = Wav(10);
+        "LIST"u8.CopyTo(wav.AsSpan(12));                                   // a chunk the walk must step over …
+        BinaryPrimitives.WriteUInt32LittleEndian(wav.AsSpan(16), 0x7FFFFFF7);   // … whose length would wrap an int
+        Assert.Equal(CarveStatus.Reject, MediaValidators.Riff(wav).Status);
     }
 
     [Fact]
     public void Flac_walks_frames_by_sync_and_crc()
     {
         var file = Flac(4);
-        var r = MediaValidators.Flac([.. file, .. new byte[300]]);   // zeros after the last frame: no sync, so the file ends there
+        var r = MediaValidators.Flac([.. file, .. new byte[1 << 20]]);   // a megabyte without a sync: the last frame ended somewhere in there
         Assert.Equal(CarveStatus.Ok, r.Status);
         Assert.StartsWith("44.1 kHz · stereo · 0:10", r.Info);
-        Assert.True(r.Size >= file.Length - 206 && r.Size <= file.Length + 300, $"size {r.Size} of {file.Length}");
+        Assert.True(r.Size >= file.Length - 206 && r.Size <= file.Length, $"size {r.Size} of {file.Length}");
         Assert.Equal(CarveStatus.Reject, MediaValidators.Flac([.. "fLaC"u8.ToArray(), 0x81, 0, 0, 4, 1, 2, 3, 4, .. new byte[40]]).Status);
     }
 
@@ -185,8 +213,11 @@ public class MediaValidatorTests
     public void Mp4_with_a_zero_size_box_or_unknown_top_level_box_is_handled()
     {
         var file = Mp4();
-        BinaryPrimitives.WriteUInt32BigEndian(file.AsSpan(file.Length - 508), 0);   // mdat "to end of file"
-        Assert.Equal(CarveStatus.Reject, MediaValidators.IsoBmff(file).Status);
+        BinaryPrimitives.WriteUInt32BigEndian(file.AsSpan(file.Length - 508), 0);   // a zero-size box after a complete moov: the file ends before it
+        var z = MediaValidators.IsoBmff(file);
+        Assert.Equal(CarveStatus.Ok, z.Status);
+        Assert.Equal(file.Length - 508, z.Size);
+        Assert.Equal(CarveStatus.Reject, MediaValidators.IsoBmff([.. file.AsSpan(0, 24), 0, 0, 0, 0, (byte)'m', (byte)'d', (byte)'a', (byte)'t']).Status);   // zero-size box with nothing before it
         var ok = Mp4();
         var r = MediaValidators.IsoBmff([.. ok, .. Box("zzzz", new byte[4])]);
         Assert.Equal(ok.Length, r.Size);

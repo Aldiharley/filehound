@@ -175,7 +175,7 @@ public sealed partial class RecoveryViewModel : ObservableObject
         if (session is null) return;
         // The reader may be mid-read on a thread-pool thread (a scan or a batch): let that finish before the handles close.
         DeepScan.Cancel();
-        var pending = new[] { Undelete.ScanTask, _batch }.Where(t => t is not null && !t.IsCompleted).ToList();
+        var pending = new[] { Undelete.ScanTask, DeepScan.ScanTask, _batch }.Where(t => t is not null && !t.IsCompleted).ToList();
         if (pending.Count == 0) { session.Dispose(); return; }
         _ = Task.WhenAll(pending!).ContinueWith(_ => session.Dispose(), TaskScheduler.Default);
     }

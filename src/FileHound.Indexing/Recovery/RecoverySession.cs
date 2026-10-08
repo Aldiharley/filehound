@@ -85,7 +85,7 @@ public sealed class RecoverySession : IDisposable
             var found = carver.Run(progress, ct);
             return (IReadOnlyList<RecoveryCandidate>)CarveWriter.Deduplicate(found, _lastUndelete).Select(ToCandidate).ToList();
         }
-        finally { _carver = null; }
+        finally { Interlocked.CompareExchange(ref _carver, null, carver); }
     }, ct);
 
     public bool IsCarvePaused => _carver?.IsPaused ?? false;
@@ -194,8 +194,8 @@ public sealed class RecoverySession : IDisposable
     {
         Directory.CreateDirectory(folder);
         string path = RecycleBinSource.UniquePath(Path.Combine(folder, f.SuggestedName), " (recovered)");
-        var (bytes, sha, runs) = CarveWriter.Recover(Reader, f, path, ct);
-        return new RecoveredFile(c, path, bytes, sha, RecoveryGrade.Excellent, null, runs);
+        var (bytes, sha, runs, finalPath) = CarveWriter.Recover(Reader, f, path, ct);
+        return new RecoveredFile(c, finalPath, bytes, sha, RecoveryGrade.Excellent, null, runs);
     }
 
     private RecoveredFile RecoverUndeleted(RecoveryCandidate c, UndeleteRecord u, string folder, CancellationToken ct)

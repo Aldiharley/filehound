@@ -10,7 +10,8 @@ public static class CarveWriter
     private static readonly HashSet<string> s_executable = new(StringComparer.OrdinalIgnoreCase)
         { ".exe", ".dll", ".scr", ".msi", ".bat", ".cmd", ".ps1", ".js", ".vbs", ".lnk", ".com", ".jar", ".hta" };
 
-    public static (long Bytes, string Sha256, IReadOnlyList<ByteRun> Runs) Recover(VolumeReader reader, CarvedFile file, string destPath, CancellationToken ct)
+    /// <returns>Bytes written, SHA-256, byte runs, and the final path (renamed to <c>.recovered</c> when a program could not be marked).</returns>
+    public static (long Bytes, string Sha256, IReadOnlyList<ByteRun> Runs, string FinalPath) Recover(VolumeReader reader, CarvedFile file, string destPath, CancellationToken ct)
     {
         long cluster = reader.Geometry.BytesPerCluster;
         if (file.Size <= 0 || file.StartLcn < 0 || file.StartLcn * cluster + file.Size > reader.Geometry.TotalClusters * cluster)
@@ -40,15 +41,25 @@ public static class CarveWriter
             try { File.Delete(destPath); } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
             throw;
         }
-        if (s_executable.Contains(Path.GetExtension(destPath))) MarkOfTheWeb(destPath);
-        return (file.Size, Convert.ToHexStringLower(hash.GetHashAndReset()), [new ByteRun(0, file.Size, file.StartLcn * cluster)]);
+        string finalPath = destPath;
+        if (s_executable.Contains(Path.GetExtension(destPath)) && !TryMarkOfTheWeb(destPath))
+        {
+            // No alternate data streams here (exFAT/FAT32 stick): make the file inert instead, so it cannot be double-clicked into running.
+            finalPath = RecycleBinSource.UniquePath(destPath + ".recovered", "");
+            File.Move(destPath, finalPath);
+        }
+        return (file.Size, Convert.ToHexStringLower(hash.GetHashAndReset()), [new ByteRun(0, file.Size, file.StartLcn * cluster)], finalPath);
     }
 
-    /// <summary>§8: SmartScreen treats the recovered program as untrusted (Zone.Identifier = Internet).</summary>
-    public static void MarkOfTheWeb(string path)
+    /// <summary>§8: SmartScreen treats the recovered program as untrusted (Zone.Identifier = Internet). False when the destination has no streams.</summary>
+    public static bool TryMarkOfTheWeb(string path)
     {
-        try { File.WriteAllText(path + ":Zone.Identifier", "[ZoneTransfer]\r\nZoneId=3\r\n"); }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException) { IndexManager.Log?.Invoke($"Zone.Identifier not written for {path}: {ex.Message}"); }
+        try { File.WriteAllText(path + ":Zone.Identifier", "[ZoneTransfer]\r\nZoneId=3\r\n"); return true; }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException)
+        {
+            IndexManager.Log?.Invoke($"Zone.Identifier not written for {path}: {ex.Message}");
+            return false;
+        }
     }
 
     /// <summary>FR-23: a carved file that starts where an undelete candidate's data starts is the same file; the named record wins.</summary>

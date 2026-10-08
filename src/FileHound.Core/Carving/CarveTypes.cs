@@ -12,12 +12,20 @@ public enum CarveStatus
     NeedMore,
 }
 
-/// <summary>What a validator says about the bytes it was given.</summary>
-public readonly record struct CarveResult(CarveStatus Status, long Size, string? Info)
+/// <summary>
+/// What a validator says about the bytes it was given. For <see cref="CarveStatus.NeedMore"/>, <see cref="Size"/> is the
+/// length that is already known to be a complete, valid prefix (0 when nothing is), which the carver accepts when it
+/// cannot read any further; <see cref="Required"/> is the total the structure claims, when the format states one.
+/// </summary>
+public readonly record struct CarveResult(CarveStatus Status, long Size, string? Info, long Required = 0)
 {
     public static CarveResult Ok(long size, string? info = null) => new(CarveStatus.Ok, size, info);
     public static readonly CarveResult Reject = new(CarveStatus.Reject, 0, null);
     public static readonly CarveResult NeedMore = new(CarveStatus.NeedMore, 0, null);
+    /// <summary>The structure runs past the span; <paramref name="validSoFar"/> bytes are a usable file on their own.</summary>
+    public static CarveResult NeedMoreAfter(long validSoFar, string? info = null) => new(CarveStatus.NeedMore, validSoFar, info);
+    /// <summary>The format states its total size; the carver fetches exactly that (or gives up when it cannot).</summary>
+    public static CarveResult NeedTotal(long required) => new(CarveStatus.NeedMore, 0, null, required);
     public bool IsOk => Status == CarveStatus.Ok;
 }
 

@@ -32,9 +32,9 @@ public class CarverTests
         var carver = new Carver(r, ClusterBitmap.Load(r)) { ChunkClusters = 16 };
         var batches = new List<IReadOnlyList<CarvedFile>>();
         carver.Batch += b => batches.Add(b);
-        CarveProgress? last = null;
-        var found = carver.Run(new Progress<CarveProgress>(p => last = p), CancellationToken.None);
-        for (int i = 0; i < 50 && last is null; i++) Thread.Sleep(20);
+        var sink = new Sink();
+        var found = carver.Run(sink, CancellationToken.None);
+        var last = sink.Last;
 
         Assert.Equal(2, found.Count);
         var p = Assert.Single(found, f => f.Type.Id == "png");
@@ -45,6 +45,55 @@ public class CarverTests
         Assert.NotNull(last);
         Assert.Equal(last!.FreeBytes, last.BytesScanned);
         Assert.Equal(2, last.Found);
+    }
+
+    /// <summary>Synchronous progress sink (Progress&lt;T&gt; posts to the pool and may deliver out of order).</summary>
+    private sealed class Sink : IProgress<CarveProgress>
+    {
+        public CarveProgress? Last;
+        public void Report(CarveProgress value) => Last = value;
+    }
+
+    [Fact]
+    public void Open_ended_file_at_a_chunk_edge_is_carved_whole()
+    {
+        // An MP3 of ~334 KB planted so that it starts in the last cluster of a 16-cluster chunk: the first window is one
+        // cluster, the validator keeps asking for more, and the carver must grow until the stream's real end.
+        var vol = new SyntheticVolume(clusters: 1024, records: 64);
+        var mp3 = FileHound.Core.Tests.Carving.MediaValidatorTests.Mp3(800, withId3: false);
+        long lcn = SyntheticVolume.MftLcn + 16 + 15;   // last cluster of the first chunk after the MFT area
+        Plant(vol, lcn, mp3);
+        using var r = vol.OpenReader();
+        var found = new Carver(r, ClusterBitmap.Load(r)) { ChunkClusters = 16, TypeFilter = ["mp3"] }.Run(null, CancellationToken.None);
+        var hit = Assert.Single(found);
+        Assert.Equal(lcn, hit.StartLcn);
+        Assert.Equal(mp3.Length, hit.Size);
+    }
+
+    [Fact]
+    public void Sized_file_jumps_straight_to_its_total_and_the_window_is_reused()
+    {
+        var vol = new SyntheticVolume(clusters: 1024, records: 64);
+        var wav = FileHound.Core.Tests.Carving.MediaValidatorTests.Wav(300_000);
+        Plant(vol, 200, wav);
+        var wav2 = FileHound.Core.Tests.Carving.MediaValidatorTests.Wav(250_000);
+        Plant(vol, 400, wav2);
+        using var r = vol.OpenReader();
+        var found = new Carver(r, ClusterBitmap.Load(r)) { ChunkClusters = 4, TypeFilter = ["wav"] }.Run(null, CancellationToken.None);
+        Assert.Equal(2, found.Count);
+        Assert.Equal(wav.Length, found[0].Size);
+        Assert.Equal(wav2.Length, found[1].Size);
+    }
+
+    [Fact]
+    public void Magic_at_an_offset_is_found_and_a_throwing_validator_is_a_reject()
+    {
+        var vol = new SyntheticVolume(clusters: 512, records: 64);
+        var mp4 = FileHound.Core.Tests.Carving.MediaValidatorTests.Mp4();
+        Plant(vol, 150, mp4);
+        using var r = vol.OpenReader();
+        var found = new Carver(r, ClusterBitmap.Load(r)) { TypeFilter = ["mp4"] }.Run(null, CancellationToken.None);
+        Assert.Equal(mp4.Length, Assert.Single(found).Size);
     }
 
     [Fact]

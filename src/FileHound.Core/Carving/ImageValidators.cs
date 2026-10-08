@@ -147,7 +147,7 @@ public static class ImageValidators
             if (w <= 0 || h <= 0 || w > 1 << 16 || h > 1 << 16) return CarveResult.Reject;
             info = $"{w}×{h}";
         }
-        return size > d.Length ? CarveResult.NeedMore : CarveResult.Ok(size, info);
+        return size > d.Length ? CarveResult.NeedTotal(size) : CarveResult.Ok(size, info);
     }
 
     // ------------------------------------------------------------------ TIFF
@@ -204,7 +204,7 @@ public static class ImageValidators
             ifd = U32(d, (int)(entriesEnd - 4), le);
         }
         if (width > 0 && height > 0) info = $"{width}×{height}";
-        if (extent > d.Length) return CarveResult.NeedMore;
+        if (extent > d.Length) return CarveResult.NeedTotal(extent);
         return CarveResult.Ok(extent, info);
     }
 
@@ -248,7 +248,7 @@ public static class ImageValidators
         if (d.Length < 30) return CarveResult.NeedMore;
         if (!d[..4].SequenceEqual("RIFF"u8) || !d.Slice(8, 4).SequenceEqual("WEBP"u8)) return CarveResult.Reject;
         long size = BinaryPrimitives.ReadUInt32LittleEndian(d[4..]) + 8L;
-        if (size < 30 || (size & 1) != 0 && size > 31) { if (size < 30) return CarveResult.Reject; }
+        if (size < 30) return CarveResult.Reject;
         var chunk = d.Slice(12, 4);
         string? info = null;
         if (chunk.SequenceEqual("VP8 "u8) && d.Length >= 30 && d[23] == 0x9D && d[24] == 0x01 && d[25] == 0x2A)
@@ -261,6 +261,6 @@ public static class ImageValidators
         else if (chunk.SequenceEqual("VP8X"u8))
             info = $"{(d[24] | d[25] << 8 | d[26] << 16) + 1}×{(d[27] | d[28] << 8 | d[29] << 16) + 1}";
         else if (!chunk.SequenceEqual("VP8 "u8) && !chunk.SequenceEqual("VP8L"u8)) return CarveResult.Reject;
-        return size > d.Length ? CarveResult.NeedMore : CarveResult.Ok(size, info);
+        return size > d.Length ? CarveResult.NeedTotal(size) : CarveResult.Ok(size, info);
     }
 }

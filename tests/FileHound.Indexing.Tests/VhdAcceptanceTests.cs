@@ -36,7 +36,7 @@ public class VhdAcceptanceTests
         var dest = Directory.CreateTempSubdirectory("fh-vhd-carve-").FullName;
         try
         {
-            var (_, sha, _) = CarveWriter.Recover(reader, hit, Path.Combine(dest, hit.SuggestedName), CancellationToken.None);
+            var (_, sha, _, _) = CarveWriter.Recover(reader, hit, Path.Combine(dest, hit.SuggestedName), CancellationToken.None);
             Assert.Equal(Sha(png), sha);
         }
         finally { Directory.Delete(dest, true); }

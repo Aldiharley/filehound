@@ -29,8 +29,9 @@ public static class MediaValidators
                     info = $"{rate / 1000.0:0.#} kHz · {bits}-bit · {(channels == 1 ? "mono" : channels == 2 ? "stereo" : channels + " ch")}";
                     break;
                 }
-                if (len > int.MaxValue - 8) return CarveResult.Reject;
-                p += 8 + (int)len + (int)(len & 1);
+                long next = p + 8L + len + (len & 1);
+                if (next > size || next > int.MaxValue) return CarveResult.Reject;
+                p = (int)next;
             }
         }
         else if (form.SequenceEqual("AVI "u8))
@@ -45,7 +46,7 @@ public static class MediaValidators
             }
         }
         else return CarveResult.Reject;
-        return size > d.Length ? CarveResult.NeedMore : CarveResult.Ok(size, info);
+        return size > d.Length ? CarveResult.NeedTotal(size) : CarveResult.Ok(size, info);
     }
 
     // ------------------------------------------------------------------ ISO-BMFF (MP4, MOV, M4A, HEIC)
@@ -61,7 +62,7 @@ public static class MediaValidators
         bool sawMoov = false, sawMdat = false;
         for (int guard = 0; guard < 100_000; guard++)
         {
-            if (p + 8 > d.Length) return p > 8 && (sawMoov || sawMdat) ? CarveResult.Ok(p, info) : CarveResult.NeedMore;
+            if (p + 8 > d.Length) return p > 8 && (sawMoov || sawMdat) ? CarveResult.NeedMoreAfter(p, info) : CarveResult.NeedMore;
             long size = BinaryPrimitives.ReadUInt32BigEndian(d[(int)p..]);
             var type = d.Slice((int)p + 4, 4);
             string typeName = System.Text.Encoding.ASCII.GetString(type);
@@ -73,8 +74,9 @@ public static class MediaValidators
             }
             else if (size == 0)
             {
-                // "to end of file" is only legal for the last box; without an outer bound we cannot size it.
-                return CarveResult.Reject;
+                // "to end of file" is only legal for the last box; without an outer bound we cannot size it. After a
+                // complete movie it is far more likely to be zeroed free space following the file, so the file ends here.
+                return sawMoov || sawMdat ? CarveResult.Ok(p, info) : CarveResult.Reject;
             }
             else if (size < 8) return CarveResult.Reject;
             if (!s_topLevel.Contains(typeName)) return p > 0 && (sawMoov || sawMdat) ? CarveResult.Ok(p, info) : CarveResult.Reject;
@@ -85,11 +87,8 @@ public static class MediaValidators
             }
             if (typeName == "mdat") sawMdat = true;
             p += size;
-            if (p > d.Length)
-            {
-                return CarveResult.NeedMore;
-            }
-            if (p == d.Length && (sawMoov || sawMdat)) return CarveResult.Ok(p, info);
+            if (p > d.Length) return CarveResult.NeedTotal(p);
+            if (p == d.Length && (sawMoov || sawMdat)) return CarveResult.NeedMoreAfter(p, info);
         }
         return CarveResult.Reject;
     }
@@ -158,7 +157,7 @@ public static class MediaValidators
         if (!unknown)
         {
             long end = segStart + segSize;
-            if (end > d.Length) return CarveResult.NeedMore;
+            if (end > d.Length) return CarveResult.NeedTotal(end);
             info = SegmentInfo(d.Slice((int)segStart, (int)Math.Min(segSize, 1 << 20)));
             return CarveResult.Ok(end, info);
         }
@@ -166,14 +165,14 @@ public static class MediaValidators
         long q = segStart;
         for (int guard = 0; guard < 1_000_000; guard++)
         {
-            if (q + 2 > d.Length) return q > segStart ? CarveResult.Ok(q, info) : CarveResult.NeedMore;
+            if (q + 2 > d.Length) return q > segStart ? CarveResult.NeedMoreAfter(q, info) : CarveResult.NeedMore;
             uint id = ReadId(d, (int)q, out int idLen);
             if (idLen == 0 || !IsSegmentChild(id)) return q > segStart ? CarveResult.Ok(q, info) : CarveResult.Reject;
             if (!ReadVint(d, (int)q + idLen, out long size, out int sl2, out bool unk2)) return CarveResult.NeedMore;
             if (unk2) return CarveResult.Reject;
             if (id == 0x1549A966 && q + idLen + sl2 + size <= d.Length) info ??= SegmentInfo(d.Slice((int)q, (int)(idLen + sl2 + size)));
             q += idLen + sl2 + size;
-            if (q > d.Length) return CarveResult.NeedMore;
+            if (q > d.Length) return CarveResult.NeedTotal(q);
         }
         return CarveResult.Reject;
     }
@@ -251,7 +250,7 @@ public static class MediaValidators
         for (int guard = 0; guard < 10_000_000; guard++)
         {
             if (p + 27 > d.Length) return CarveResult.NeedMore;
-            if (!d.Slice(p, 4).SequenceEqual("OggS"u8) || d[p + 4] != 0) return p > 0 ? CarveResult.Reject : CarveResult.Reject;
+            if (!d.Slice(p, 4).SequenceEqual("OggS"u8) || d[p + 4] != 0) return CarveResult.Reject;
             byte flags = d[p + 5];
             int segments = d[p + 26];
             if (p + 27 + segments > d.Length) return CarveResult.NeedMore;
@@ -291,20 +290,21 @@ public static class MediaValidators
         string? info = null;
         for (int guard = 0; guard < 10_000_000; guard++)
         {
-            if (p + 4 > d.Length) return frames >= 4 ? CarveResult.Ok(p, info) : CarveResult.NeedMore;
+            // The stream may continue past the span: report the whole frames so far and ask for more.
+            if (p + 4 > d.Length) return frames >= 4 ? CarveResult.NeedMoreAfter(p, info) : CarveResult.NeedMore;
             int len = FrameLength(d[p..], out string? frameInfo);
             if (len <= 0)
             {
-                if (frames < 4) return frames == 0 && p == 0 ? CarveResult.Reject : CarveResult.Reject;
-                if (p + 128 <= d.Length && d.Slice(p, 3).SequenceEqual("TAG"u8)) p += 128;
+                if (frames < 4) return CarveResult.Reject;
+                if (p + 3 <= d.Length && d.Slice(p, 3).SequenceEqual("TAG"u8)) return p + 128 > d.Length ? CarveResult.NeedTotal(p + 128) : CarveResult.Ok(p + 128, info);
                 return CarveResult.Ok(p, info);
             }
             info ??= frameInfo;
-            if (p + len > d.Length) return frames >= 4 ? CarveResult.Ok(p, info) : CarveResult.NeedMore;
+            if (p + len > d.Length) return frames >= 4 ? CarveResult.NeedMoreAfter(p, info) : CarveResult.NeedMore;
             p += len;
             frames++;
         }
-        return CarveResult.Ok(p, info);
+        return CarveResult.NeedMoreAfter(p, info);
     }
 
     private static int FrameLength(ReadOnlySpan<byte> h, out string? info)
@@ -356,19 +356,23 @@ public static class MediaValidators
         int frames = 0;
         for (int guard = 0; guard < 10_000_000; guard++)
         {
-            if (p + 16 > d.Length) return frames > 0 ? CarveResult.Ok(p, info) : CarveResult.NeedMore;
-            int next = NextFlacFrame(d, p);
+            if (p + 16 > d.Length) return frames > 0 ? CarveResult.NeedMoreAfter(p, info) : CarveResult.NeedMore;
+            int next = NextFlacFrame(d, p, out bool ranOff);
+            if (ranOff) return frames > 0 ? CarveResult.NeedMoreAfter(p, info) : CarveResult.NeedMore;   // the frame at p continues past the span
             if (next < 0) return frames > 0 ? CarveResult.Ok(p, info) : CarveResult.Reject;
-            if (next == p) break;
             p = next;
             frames++;
         }
-        return frames > 0 ? CarveResult.Ok(p, info) : CarveResult.Reject;
+        return frames > 0 ? CarveResult.NeedMoreAfter(p, info) : CarveResult.Reject;
     }
 
-    /// <summary>Validates the frame header at p (sync + CRC-8) and returns the start of the next frame (the next valid sync), or -1.</summary>
-    private static int NextFlacFrame(ReadOnlySpan<byte> d, int p)
+    /// <summary>
+    /// Validates the frame header at p (sync + CRC-8) and returns the start of the next frame (the next valid sync), or -1
+    /// when the frame at p ends without a successor within 1 MB. <paramref name="ranOff"/> is set when the span ended first.
+    /// </summary>
+    private static int NextFlacFrame(ReadOnlySpan<byte> d, int p, out bool ranOff)
     {
+        ranOff = false;
         if (!FlacHeaderOk(d, p)) return -1;
         // Frames carry no length: advance to the next position whose header validates, scanning at most 1 MB.
         int limit = Math.Min(d.Length - 2, p + (1 << 20));
@@ -376,7 +380,8 @@ public static class MediaValidators
         {
             if (d[q] == 0xFF && (d[q + 1] & 0xFE) == 0xF8 && FlacHeaderOk(d, q)) return q;
         }
-        return limit >= d.Length - 2 ? d.Length : -1;   // ran off the span: the last frame ends at the span end
+        ranOff = limit >= d.Length - 2;
+        return -1;
     }
 
     private static bool FlacHeaderOk(ReadOnlySpan<byte> d, int p)

@@ -17,6 +17,9 @@ public static class DocumentValidators
         if (last < 0) return CarveResult.NeedMore;
         int end = last + 5;
         while (end < d.Length && (d[end] == '\r' || d[end] == '\n')) end++;
+        // Linearized and incrementally updated PDFs carry several %%EOF marks; if what follows still looks like PDF
+        // syntax, the file goes on and this is only a usable prefix.
+        if (end < d.Length && LooksLikeMorePdf(d[end..])) return CarveResult.NeedMoreAfter(end);
         string? info = null;
         int pages = d.IndexOf("/Type /Pages"u8);
         if (pages < 0) pages = d.IndexOf("/Type/Pages"u8);
@@ -32,6 +35,21 @@ public static class DocumentValidators
             }
         }
         return CarveResult.Ok(end, info);
+    }
+
+    private static bool LooksLikeMorePdf(ReadOnlySpan<byte> rest)
+    {
+        int i = 0;
+        while (i < rest.Length && (rest[i] is (byte)' ' or (byte)'\t' or (byte)'\r' or (byte)'\n')) i++;
+        if (i >= rest.Length) return false;
+        var r = rest[i..];
+        if (r.StartsWith("xref"u8) || r.StartsWith("trailer"u8) || r.StartsWith("startxref"u8) || r.StartsWith("%"u8)) return true;
+        int j = 0;
+        while (j < r.Length && char.IsAsciiDigit((char)r[j])) j++;
+        if (j == 0 || j >= r.Length || r[j] != ' ') return false;
+        int k = j + 1;
+        while (k < r.Length && char.IsAsciiDigit((char)r[k])) k++;
+        return k > j + 1 && r[k..].StartsWith(" obj"u8);
     }
 
     // ------------------------------------------------------------------ ZIP (+ OOXML / ODF / EPUB / JAR)
@@ -64,7 +82,7 @@ public static class DocumentValidators
                     while (rel >= 0)
                     {
                         int at = (int)next + rel;
-                        if (at + 4 <= d.Length && d[at + 2] is 3 or 1 or 5 && d[at + 3] is 4 or 2 or 6) break;
+                        if (at + 4 <= d.Length && ((d[at + 2] == 3 && d[at + 3] == 4) || (d[at + 2] == 1 && d[at + 3] == 2) || (d[at + 2] == 5 && d[at + 3] == 6))) break;
                         int more = d[(at + 2)..].IndexOf("PK"u8);
                         rel = more < 0 ? -1 : at + 2 + more - (int)next;
                     }
@@ -73,7 +91,7 @@ public static class DocumentValidators
                     continue;
                 }
                 next += compressed;
-                if (next > d.Length) return CarveResult.NeedMore;
+                if (next > d.Length) return CarveResult.NeedTotal(next);
                 p = (int)next;
                 if ((flags & 0x08) != 0 && p + 4 <= d.Length && BinaryPrimitives.ReadUInt32LittleEndian(d[p..]) == 0x08074B50) p += 16;
             }
@@ -90,7 +108,7 @@ public static class DocumentValidators
                 if (p + 22 > d.Length) return CarveResult.NeedMore;
                 int comment = BinaryPrimitives.ReadUInt16LittleEndian(d[(p + 20)..]);
                 long end = (long)p + 22 + comment;
-                return end > d.Length ? CarveResult.NeedMore : CarveResult.Ok(end, Subtype(firstName, d));
+                return end > d.Length ? CarveResult.NeedTotal(end) : CarveResult.Ok(end, Subtype(firstName, d));
             }
             else if (sig == 0x06064B50 || sig == 0x07064B50)   // zip64 end records
             {
@@ -138,7 +156,7 @@ public static class DocumentValidators
         ulong offset = BinaryPrimitives.ReadUInt64LittleEndian(d[12..]), size = BinaryPrimitives.ReadUInt64LittleEndian(d[20..]);
         if (offset > int.MaxValue || size > int.MaxValue) return CarveResult.Reject;
         long end = 32 + (long)offset + (long)size;
-        return end > d.Length ? CarveResult.NeedMore : CarveResult.Ok(end, null);
+        return end > d.Length ? CarveResult.NeedTotal(end) : CarveResult.Ok(end, null);
     }
 
     // ------------------------------------------------------------------ RAR
@@ -164,9 +182,9 @@ public static class DocumentValidators
                     add = BinaryPrimitives.ReadUInt32LittleEndian(d[(p + 7)..]);
                 }
                 long next = p + headSize + add;
-                if (type == 0x7B) return next > d.Length ? CarveResult.NeedMore : CarveResult.Ok(next, null);
+                if (type == 0x7B) return next > d.Length ? CarveResult.NeedTotal(next) : CarveResult.Ok(next, null);
                 if (type < 0x72 || type > 0x7B) return CarveResult.Reject;
-                if (next > d.Length) return CarveResult.NeedMore;
+                if (next > d.Length) return CarveResult.NeedTotal(next);
                 p = (int)next;
             }
             return CarveResult.Reject;
@@ -190,9 +208,9 @@ public static class DocumentValidators
                     if (dataSize > long.MaxValue / 2) return CarveResult.Reject;
                     next += (long)dataSize;
                 }
-                if (type == 5) return next > d.Length ? CarveResult.NeedMore : CarveResult.Ok(next, null);
+                if (type == 5) return next > d.Length ? CarveResult.NeedTotal(next) : CarveResult.Ok(next, null);
                 if (type < 1 || type > 5) return CarveResult.Reject;
-                if (next > d.Length) return CarveResult.NeedMore;
+                if (next > d.Length) return CarveResult.NeedTotal(next);
                 p = (int)next;
             }
         }
@@ -228,34 +246,48 @@ public static class DocumentValidators
         long deflateEnd = DeflateEnd(d[p..]);
         if (deflateEnd < 0) return d.Length - p < 8 ? CarveResult.NeedMore : CarveResult.Reject;
         long end = p + deflateEnd + 8;
-        return end > d.Length ? CarveResult.NeedMore : CarveResult.Ok(end, null);
+        return end > d.Length ? CarveResult.NeedTotal(end) : CarveResult.Ok(end, null);
     }
 
-    /// <summary>Length of the deflate stream at the start of <paramref name="data"/>, found by inflating through a stream that reports exactly how much was consumed.</summary>
-    private static long DeflateEnd(ReadOnlySpan<byte> data)
+    /// <summary>
+    /// Length of the deflate stream at the start of <paramref name="data"/>: inflated over the pinned span (no copy)
+    /// through a stream that hands out one byte at a time, so the inflater's position is exact at the final block.
+    /// </summary>
+    private static unsafe long DeflateEnd(ReadOnlySpan<byte> data)
     {
-        var counting = new CountingStream(data.ToArray());
-        try
+        fixed (byte* ptr = data)
         {
-            using var inflate = new DeflateStream(counting, CompressionMode.Decompress);
-            var sink = new byte[1 << 16];
-            while (inflate.Read(sink, 0, sink.Length) > 0) { }
+            var counting = new CountingStream(ptr, data.Length);
+            try
+            {
+                using var inflate = new DeflateStream(counting, CompressionMode.Decompress);
+                var sink = new byte[1 << 16];
+                long total = 0;
+                int n;
+                while ((n = inflate.Read(sink, 0, sink.Length)) > 0) { total += n; if (total > 1L << 32) return -1; }
+            }
+            catch (InvalidDataException) { return -1; }
+            return counting.ConsumedByDeflate;
         }
-        catch (InvalidDataException) { return -1; }
-        return counting.ConsumedByDeflate;
     }
 
-    /// <summary>Feeds one byte at a time so the inflater's position is exact at the end of the last block.</summary>
-    private sealed class CountingStream(byte[] data) : Stream
+    /// <summary>Feeds one byte at a time from pinned memory so the inflater's position is exact at the end of the last block.</summary>
+    private sealed unsafe class CountingStream(byte* data, int length) : Stream
     {
         private int _pos;
         public long ConsumedByDeflate => _pos;
         public override bool CanRead => true; public override bool CanSeek => false; public override bool CanWrite => false;
-        public override long Length => data.Length; public override long Position { get => _pos; set => throw new NotSupportedException(); }
+        public override long Length => length; public override long Position { get => _pos; set => throw new NotSupportedException(); }
         public override int Read(byte[] buffer, int offset, int count)
         {
-            if (_pos >= data.Length || count == 0) return 0;
+            if (_pos >= length || count == 0) return 0;
             buffer[offset] = data[_pos++];
+            return 1;
+        }
+        public override int Read(Span<byte> buffer)
+        {
+            if (_pos >= length || buffer.IsEmpty) return 0;
+            buffer[0] = data[_pos++];
             return 1;
         }
         public override void Flush() { }
@@ -275,7 +307,7 @@ public static class DocumentValidators
         uint pages = BinaryPrimitives.ReadUInt32BigEndian(d[28..]);
         if (pages == 0) return CarveResult.Reject;
         long size = (long)pages * pageSize;
-        return size > d.Length ? CarveResult.NeedMore : CarveResult.Ok(size, $"{pages:N0} page{(pages == 1 ? "" : "s")} of {pageSize}");
+        return size > d.Length ? CarveResult.NeedTotal(size) : CarveResult.Ok(size, $"{pages:N0} page{(pages == 1 ? "" : "s")} of {pageSize}");
     }
 
     // ------------------------------------------------------------------ PE (exe / dll)
@@ -317,7 +349,7 @@ public static class DocumentValidators
         }
         string arch = machine switch { 0x8664 => "x64", 0x14C => "x86", 0xAA64 => "ARM64", _ => $"machine 0x{machine:X}" };
         string kind = (characteristics & 0x2000) != 0 ? "DLL" : "EXE";
-        return end > d.Length ? CarveResult.NeedMore : CarveResult.Ok(end, $"{arch} {kind}");
+        return end > d.Length ? CarveResult.NeedTotal(end) : CarveResult.Ok(end, $"{arch} {kind}");
     }
 
     // ------------------------------------------------------------------ OLE2 (doc / xls / ppt / msg)
@@ -333,38 +365,52 @@ public static class DocumentValidators
         int sector = 1 << sectorShift;
         uint fatSectors = BinaryPrimitives.ReadUInt32LittleEndian(d[44..]);
         uint difatStart = BinaryPrimitives.ReadUInt32LittleEndian(d[68..]), difatCount = BinaryPrimitives.ReadUInt32LittleEndian(d[72..]);
-        if (fatSectors == 0 || fatSectors > 1 << 20) return CarveResult.Reject;
+        if (fatSectors == 0 || fatSectors > 1 << 20 || difatCount > 65536) return CarveResult.Reject;
         var fatList = new List<uint>();
+        var seen = new HashSet<uint>();
+        bool AddFat(uint s)
+        {
+            if (s >= 0xFFFFFFFA || !seen.Add(s) || fatList.Count >= fatSectors) return false;
+            fatList.Add(s);
+            return true;
+        }
         for (int i = 0; i < 109 && fatList.Count < fatSectors; i++)
         {
             uint s = BinaryPrimitives.ReadUInt32LittleEndian(d[(76 + i * 4)..]);
             if (s == 0xFFFFFFFF) break;
-            fatList.Add(s);
+            if (!AddFat(s)) return CarveResult.Reject;   // duplicate or special sector number: not a real FAT chain
         }
         uint difat = difatStart;
+        var difatSeen = new HashSet<uint>();
         for (uint k = 0; k < difatCount && difat != 0xFFFFFFFE && difat != 0xFFFFFFFF && fatList.Count < fatSectors; k++)
         {
+            if (!difatSeen.Add(difat)) return CarveResult.Reject;   // the DIFAT chain loops
             long at = 512 + (long)difat * sector;
             if (at + sector > d.Length) return CarveResult.NeedMore;
             int perSector = sector / 4 - 1;
+            int before = fatList.Count;
             for (int i = 0; i < perSector && fatList.Count < fatSectors; i++)
             {
                 uint s = BinaryPrimitives.ReadUInt32LittleEndian(d[(int)(at + i * 4)..]);
                 if (s == 0xFFFFFFFF) break;
-                fatList.Add(s);
+                if (!AddFat(s)) return CarveResult.Reject;
             }
+            if (fatList.Count == before) return CarveResult.Reject;   // a DIFAT sector that lists nothing is corrupt
             difat = BinaryPrimitives.ReadUInt32LittleEndian(d[(int)(at + perSector * 4)..]);
         }
-        long used = 0;
+        // The file extends to the highest sector the FAT describes as in use (free holes in the middle still count).
+        long highest = -1;
+        long index = 0;
         foreach (uint fs in fatList)
         {
             long at = 512 + (long)fs * sector;
             if (at + sector > d.Length) return CarveResult.NeedMore;
-            for (int i = 0; i < sector / 4; i++)
-                if (BinaryPrimitives.ReadUInt32LittleEndian(d[(int)(at + i * 4)..]) != 0xFFFFFFFF) used++;
+            for (int i = 0; i < sector / 4; i++, index++)
+                if (BinaryPrimitives.ReadUInt32LittleEndian(d[(int)(at + i * 4)..]) != 0xFFFFFFFF) highest = index;
         }
-        long size = 512 + used * sector;
-        if (size > d.Length) return CarveResult.NeedMore;
+        if (highest < 0) return CarveResult.Reject;
+        long size = 512 + (highest + 1) * sector;
+        if (size > d.Length) return CarveResult.NeedTotal(size);
         return CarveResult.Ok(size, OleSubtype(d[..(int)size]));
     }
 
@@ -412,7 +458,7 @@ public static class DocumentValidators
         else if (version >= 23) { size = (long)BinaryPrimitives.ReadUInt64LittleEndian(d[0xB8..]); kind = "Unicode"; }
         else return CarveResult.Reject;
         if (size < 512) return CarveResult.Reject;
-        return size > d.Length ? CarveResult.NeedMore : CarveResult.Ok(size, $"{kind} PST");
+        return size > d.Length ? CarveResult.NeedTotal(size) : CarveResult.Ok(size, $"{kind} PST");
     }
 
     // ------------------------------------------------------------------ LNK

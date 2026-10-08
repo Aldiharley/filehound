@@ -182,6 +182,37 @@ public class DocumentValidatorTests
     }
 
     [Fact]
+    public void Linearized_pdf_keeps_reading_past_the_first_eof()
+    {
+        var pdf = Encoding.ASCII.GetBytes("%PDF-1.5\n%\xE2\xE3\n1 0 obj << /Linearized 1 >> endobj\nxref\ntrailer\nstartxref\n9\n%%EOF\n12 0 obj << /Type /Page >> endobj\n%%EOF\n");
+        int first = Encoding.ASCII.GetString(pdf).IndexOf("%%EOF", StringComparison.Ordinal) + 6;
+        var r = DocumentValidators.Pdf(pdf.AsSpan(0, first + 20));   // cut inside the second object
+        Assert.Equal(CarveStatus.NeedMore, r.Status);
+        Assert.Equal(first, r.Size);
+        Assert.Equal(pdf.Length, DocumentValidators.Pdf(pdf).Size);
+    }
+
+    [Fact]
+    public void Ole2_with_a_looping_difat_or_duplicate_fat_is_rejected()
+    {
+        var looping = Ole2();
+        BinaryPrimitives.WriteUInt32LittleEndian(looping.AsSpan(68), 2);        // DIFAT at sector 2 …
+        BinaryPrimitives.WriteUInt32LittleEndian(looping.AsSpan(72), 50);       // … 50 of them
+        BinaryPrimitives.WriteUInt32LittleEndian(looping.AsSpan(44), 3);        // wants 3 FAT sectors
+        var grown = new byte[512 * 4];
+        looping.CopyTo(grown, 0);
+        for (int i = 0; i < 127; i++) BinaryPrimitives.WriteUInt32LittleEndian(grown.AsSpan(512 * 3 + i * 4), 0xFFFFFFFF);
+        BinaryPrimitives.WriteUInt32LittleEndian(grown.AsSpan(512 * 3 + 127 * 4), 2);   // next DIFAT = itself
+        var sw = Stopwatch.StartNew();
+        Assert.Equal(CarveStatus.Reject, DocumentValidators.Ole2(grown).Status);
+        Assert.True(sw.ElapsedMilliseconds < 1000);
+        var dup = Ole2();
+        BinaryPrimitives.WriteUInt32LittleEndian(dup.AsSpan(44), 2);
+        BinaryPrimitives.WriteUInt32LittleEndian(dup.AsSpan(80), 0);            // DIFAT[1] = sector 0 again
+        Assert.Equal(CarveStatus.Reject, DocumentValidators.Ole2(dup).Status);
+    }
+
+    [Fact]
     public void Pdf_without_any_eof_asks_for_more() =>
         Assert.Equal(CarveStatus.NeedMore, DocumentValidators.Pdf(Encoding.ASCII.GetBytes("%PDF-1.4 stuff")).Status);
 

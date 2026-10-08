@@ -21,7 +21,8 @@ public sealed class CarveWriterTests : IDisposable
         using var r = vol.OpenReader();
         var carved = new CarvedFile(Signatures.ById("png")!, 120, png.Length, "3×3");
         var path = Path.Combine(_dest, carved.SuggestedName);
-        var (bytes, sha, runs) = CarveWriter.Recover(r, carved, path, CancellationToken.None);
+        var (bytes, sha, runs, finalPath) = CarveWriter.Recover(r, carved, path, CancellationToken.None);
+        Assert.Equal(path, finalPath);
         Assert.Equal(png.Length, bytes);
         Assert.Equal(Sha(png), sha);
         Assert.Equal(png, File.ReadAllBytes(path));

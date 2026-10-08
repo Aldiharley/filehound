@@ -47,6 +47,12 @@
     <SolidColorBrush x:Key="HighlightBack" Color="{StaticResource HighlightBackColor}" />
     <SolidColorBrush x:Key="SelectionFill" Color="#73F8CDB8" />
     <SolidColorBrush x:Key="OtherCategory" Color="#E8DFD3" />
+    <!-- Recovery grade chip text colours: docs/superpowers/specs/2026-10-08-file-recovery-uiux.md §2 -->
+    <SolidColorBrush x:Key="GradeMintInk" Color="#2F5A3E" />
+    <SolidColorBrush x:Key="GradeButterInk" Color="#7A5A14" />
+    <SolidColorBrush x:Key="GradeRoseInk" Color="#8A3A47" />
+    <SolidColorBrush x:Key="GradeLilacInk" Color="#5A4478" />
+    <SolidColorBrush x:Key="GradeSkyInk" Color="#2F4A72" />
 
     <LinearGradientBrush x:Key="HeroGradient" StartPoint="0,0" EndPoint="1,1">
         <GradientStop Color="#F9D3C0" Offset="0" />

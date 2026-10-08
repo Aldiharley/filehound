@@ -63,6 +63,25 @@ Turbo lists each hard-linked file under one of its names (as Everything does), w
 
 When FileHound runs elevated it opens files through the normal desktop shell, so they never inherit admin rights. Drag-out is disabled while elevated, because Windows blocks dragging from an elevated app into a normal one.
 
+## Recovery
+
+The **Recovery** page brings deleted files back, one drive at a time, from these sources:
+
+| Tab | Where it looks | Needs Turbo | Puts files |
+|---|---|---|---|
+| **Recycle Bin** | Every `$Recycle.Bin` on the drive (other accounts' bins too when elevated) | no | back in place (*Restore*) or in a folder on another drive (*Recover*) |
+| **Recently deleted** | A log of deletions FileHound builds from the NTFS change journal, including files that skipped the bin (Shift+Delete, command line, apps). Each entry shows whether its MFT record is still free | yes | on another drive |
+| **Previous versions**, **Undelete**, **Deep scan** | shadow copies, the MFT's deleted records, and a free-space signature scan | yes | coming in the next builds; see [`docs/superpowers/specs/2026-10-08-file-recovery-design.md`](docs/superpowers/specs/2026-10-08-file-recovery-design.md) |
+
+Rules that always hold:
+
+- **Read-only.** While the Recovery page is open on a drive, FileHound stops writing to it: no snapshot saves, no deletion-log saves. The drive's own index keeps updating in memory.
+- **Different drive.** Anything recovered (as opposed to restored in place) must go to a folder on another volume, so a recovery can never overwrite the data it is recovering. The page refuses a destination on the source volume.
+- **Honest grades.** Every candidate carries a chip: *Excellent*, *Recoverable (slot intact)*, *Record reused*, *In Recycle Bin*, *Unknown*. Tooltips say what the grade means and why.
+- **Receipts.** Each recovered file is hashed (SHA-256) and listed in `manifest.csv` inside a `FileHound Recovery <date> <time>` folder; the lists export as CSV, and the session as [DFXML](https://github.com/dfxml-working-group/dfxml_schema).
+
+The deletion log lives in `%LOCALAPPDATA%\FileHound\recovery\<letter>_<serial>.dlog` (last 50,000 deletions per drive) and is backfilled from the journal's history the first time Turbo runs, so deletions from before FileHound was installed show up too, as far back as the journal reaches.
+
 ## Query syntax
 
 | Query | Meaning |
@@ -154,15 +173,28 @@ The app also has a QA mode that renders every page to PNG: `FileHound.exe --snap
 ## Architecture
 
 ```
-FileHound.Core       pure .NET: struct-of-arrays VolumeIndex, query parser, matchers (fzf-style + Myers), SearchEngine, snapshots
-FileHound.Indexing   Win32: drive discovery, MFT scanner, USN updater, parallel walker, FileSystemWatcher, IndexManager
-FileHound.App        WPF + CommunityToolkit.Mvvm: clay theme, Dashboard / Search / Drives / Settings, tray, hotkey
-tools/FileHound.Cli  headless scan / search / bench
+FileHound.Core       pure .NET: struct-of-arrays VolumeIndex, query parser, matchers (fzf-style + Myers), SearchEngine, snapshots,
+                     recovery models, Recycle Bin $I parser, deletion-log store, CSV/DFXML exports
+FileHound.Indexing   Win32: drive discovery, MFT scanner, USN updater, parallel walker, FileSystemWatcher, IndexManager,
+                     recovery: deletion log, journal gap oracle, Recycle Bin source, RecoverySession
+FileHound.App        WPF + CommunityToolkit.Mvvm: clay theme, Dashboard / Search / Drives / Recovery / Settings, tray, hotkey
+tools/FileHound.Cli  headless scan / search / bench / recovery-probe
 ```
 
 Design docs live in [`docs/superpowers/specs`](docs/superpowers/specs), the implementation plan in [`docs/superpowers/plans`](docs/superpowers/plans), and background research in [`docs/research`](docs/research).
 
 ## Changelog
+
+### 1.2.0
+
+- **Recovery page.** A new sidebar page brings deleted files back, drive by drive (see [Recovery](#recovery)):
+  - **Recycle Bin tab.** Lists every bin on the drive with original name, folder, size and deletion time, parsed from the `$I` metadata files (v1 and v2). *Restore* puts items back in place (adding "(restored)" when the name is taken); *Recover* copies them to another drive.
+  - **Recently deleted tab** (Turbo). FileHound now keeps a per-drive log of deletions from the USN change journal: plain deletes, moves to the Recycle Bin, Windows 11 POSIX deletes (the `$Extend\$Deleted` marker) and "replaced" saves. It is backfilled from the journal's history, hides temp/cache noise by default, and checks whether each file's MFT record is still free.
+  - **Read-only sessions and the different-drive rule.** Opening the page on a drive suspends FileHound's own writes to it, and recovered files must go to another volume.
+  - **Forensic extras.** SHA-256 per recovered file, `manifest.csv`, CSV export of any list and DFXML export of the session.
+- **Turbo on Windows 11 POSIX deletes.** The journal updater now recognises the rename into `\$Extend\$Deleted` as the deletion, so such files leave the index immediately instead of when the later `FILE_DELETE` record arrives.
+- New clay assets: a digging hound, a hound with a rescued file, and icons for Recycle Bin, timeline, undelete, shadow copies, deep scan, read-only and export.
+- `FileHound.Cli recovery-probe` reports which raw-read paths (volume, physical disk, shadow copy) work on a drive.
 
 ### 1.1.0
 

@@ -4,7 +4,7 @@ using System.IO.Hashing;
 namespace FileHound.Core.Tests.Carving;
 
 /// <summary>Hand-built, structurally valid files for validator tests (lengths and CRCs computed, content meaningless).</summary>
-internal static class SyntheticFiles
+public static class SyntheticFiles
 {
     public static byte[] Jpeg(int width, int height, byte[]? entropy = null)
     {

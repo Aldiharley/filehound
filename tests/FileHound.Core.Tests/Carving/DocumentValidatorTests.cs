@@ -183,8 +183,7 @@ public class DocumentValidatorTests
 
     [Fact]
     public void Pdf_without_any_eof_asks_for_more() =>
-        Assert.Equal(CarveStatus.NeedMore, DocumentValidators.Pdf(Encoding.ASCII.GetBytes("%PDF-1.4
-stuff")).Status);
+        Assert.Equal(CarveStatus.NeedMore, DocumentValidators.Pdf(Encoding.ASCII.GetBytes("%PDF-1.4 stuff")).Status);
 
     [Fact]
     public void Ooxml_subtype_and_zip_listing()

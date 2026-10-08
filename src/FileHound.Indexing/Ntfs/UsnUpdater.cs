@@ -1,5 +1,7 @@
 using System.Runtime.InteropServices;
+using FileHound.Core.Recovery;
 using FileHound.Indexing.Interop;
+using FileHound.Indexing.Recovery;
 
 namespace FileHound.Indexing.Ntfs;
 
@@ -31,6 +33,16 @@ public sealed class UsnUpdater : IDisposable
     public event EventHandler? JournalInvalid;
     /// <summary>Raised (on a background thread) when the poll loop hit an unexpected error and stopped; the owner must rescan.</summary>
     public event EventHandler<Exception>? Faulted;
+    /// <summary>
+    /// Raised for every file that leaves the volume's tree — a delete, a move into the Recycle Bin, or a Windows 11 POSIX
+    /// delete (rename into <c>\$Extend\$Deleted</c>) — while the index entry still exists, so the parent path is known.
+    /// Raised with the write lock held: handlers must be quick and must not touch the index.
+    /// </summary>
+    public event EventHandler<UsnDeletion>? Deleted;
+
+    /// <summary>Recent deletes by (parent record, lowercase name) for save-by-replace detection (FR-6).</summary>
+    private readonly Dictionary<(long, string), (long RecordNo, ushort Sequence, long UsnTicks)> _recentDeletes = [];
+    private static readonly TimeSpan ReplaceWindow = TimeSpan.FromSeconds(2);
 
     public void Start() => _loop = Task.Run(LoopAsync);
 
@@ -123,19 +135,27 @@ public sealed class UsnUpdater : IDisposable
                 }
                 if ((rec.Reason & UsnReason.FileDelete) != 0)
                 {
+                    RaiseDeleted(rec, e, parent, parentIndexed, DeletionKind.Deleted);
                     if (e > 0) { _index.Delete(e); changes++; }
                     continue;
                 }
                 if ((rec.Reason & (UsnReason.FileCreate | UsnReason.RenameNewName)) != 0 || e <= 0)
                 {
                     bool skippedName = rec.ParentRecordNo == RootRecord && MftScanner.IsSkippedRootName(rec.Name);
-                    if (!parentIndexed || skippedName)
+                    // A rename into the Recycle Bin or a POSIX-delete marker leaves the tree even though those folders
+                    // are themselves indexed; a destination that isn't indexed at all leaves it too.
+                    var leaving = (rec.Reason & UsnReason.RenameNewName) != 0 && _index.IsLive(e) ? ClassifyLeaving(rec, parent, parentIndexed) : null;
+                    if (!parentIndexed || skippedName || leaving is not null)
                     {
-                        // Created or moved outside the indexed tree (Recycle Bin, metafile area, excluded folder):
-                        // if we knew the item, it has left the tree.
-                        if (_index.IsLive(e)) { _index.Delete(e); changes++; }
+                        if (_index.IsLive(e))
+                        {
+                            RaiseDeleted(rec, e, -1, false, leaving ?? DeletionKind.Deleted);
+                            _index.Delete(e);
+                            changes++;
+                        }
                         continue;
                     }
+                    if ((rec.Reason & UsnReason.FileCreate) != 0) NoteReplacement(rec);
                     var flags = EntryFlagsExtensions.FromAttributes(rec.Attributes);
                     if (_index.IsLive(e))
                     {
@@ -166,6 +186,84 @@ public sealed class UsnUpdater : IDisposable
         foreach (int dir in restoredDirs) RebuildSubtree(dir);
         foreach (int e in refresh) RefreshMetadata(e);
         return changes;
+    }
+
+    /// <summary>
+    /// Builds the deletion notification from the index entry (if still indexed) before it is removed.
+    /// The parent path is the entry's own parent when known; otherwise the USN record's parent, when that is indexed.
+    /// </summary>
+    private void RaiseDeleted(in UsnRecord rec, int e, int usnParent, bool usnParentIndexed, DeletionKind kind)
+    {
+        var handler = Deleted;
+        string name;
+        string? parentPath = null;
+        long size = -1, modified = 0;
+        bool isDir = rec.IsDirectory;
+        if (_index.IsLive(e))
+        {
+            name = _index.Name(e).ToString();
+            parentPath = PathBuilder.GetParentPath(_index, e);
+            size = (_index.Flags(e) & EntryFlags.MetadataKnown) != 0 ? _index.Size(e) : -1;
+            modified = _index.ModifiedTicks(e);
+            isDir = _index.IsDirectory(e);
+        }
+        else
+        {
+            name = rec.Name.ToString();
+            if (usnParentIndexed) parentPath = usnParent == VolumeIndex.RootEntry ? _index.Root : PathBuilder.GetFullPath(_index, usnParent);
+        }
+        if (kind == DeletionKind.Deleted && !isDir)
+        {
+            var key = (rec.ParentRecordNo, name.ToLowerInvariant());
+            _recentDeletes[key] = (rec.RecordNo, rec.Sequence, rec.TimestampUtc?.Ticks ?? DateTime.UtcNow.Ticks);
+            if (_recentDeletes.Count > 4096) _recentDeletes.Clear();
+        }
+        if (handler is null) return;
+        long deletedTicks = rec.TimestampUtc?.Ticks ?? DateTime.UtcNow.Ticks;
+        handler(this, new UsnDeletion(rec.RecordNo, rec.Sequence, rec.ParentRecordNo, name, parentPath, size, isDir, modified, deletedTicks, rec.Usn, kind));
+    }
+
+    /// <summary>
+    /// Decides whether a rename takes the file out of the indexed tree: a POSIX-delete marker or a move into
+    /// $Recycle.Bin (Recycled), a move to an unindexed destination (Deleted), or null for an ordinary move.
+    /// </summary>
+    private DeletionKind? ClassifyLeaving(in UsnRecord rec, int newParent, bool newParentIndexed)
+    {
+        if (IsPosixDeleteMarker(rec)) return DeletionKind.Deleted;
+        if (newParentIndexed && newParent > 0)
+        {
+            var path = PathBuilder.GetFullPath(_index, newParent);
+            if (path.Contains(@"\$Recycle.Bin\", StringComparison.OrdinalIgnoreCase) || path.EndsWith(@"\$Recycle.Bin", StringComparison.OrdinalIgnoreCase))
+                return DeletionKind.Recycled;
+            return null;
+        }
+        return newParentIndexed ? null : DeletionKind.Deleted;
+    }
+
+    /// <summary>
+    /// Windows 11 deletes are POSIX unlinks: the file is first renamed into <c>\$Extend\$Deleted</c> as 24 hex characters
+    /// whose first 16 are the file reference (or "16hex:name" on older builds). Requiring the embedded FRN to match keeps
+    /// user files with all-hex names from being misclassified.
+    /// </summary>
+    private static bool IsPosixDeleteMarker(in UsnRecord rec)
+    {
+        var name = rec.Name;
+        int colon = name.IndexOf(':');
+        var hex = colon >= 0 ? name[..colon] : name;
+        if (hex.Length != 16 && hex.Length != 24) return false;
+        foreach (char c in hex) if (!char.IsAsciiHexDigit(c)) return false;
+        if (!ulong.TryParse(hex[..16], System.Globalization.NumberStyles.HexNumber, null, out ulong frn)) return false;
+        return (long)(frn & 0x0000_FFFF_FFFF_FFFF) == rec.RecordNo;
+    }
+
+    /// <summary>A create with the same name and parent as a delete seconds earlier is a save-by-replace: retag the deletion.</summary>
+    private void NoteReplacement(in UsnRecord rec)
+    {
+        var key = (rec.ParentRecordNo, rec.Name.ToString().ToLowerInvariant());
+        if (!_recentDeletes.Remove(key, out var prior)) return;
+        long now = rec.TimestampUtc?.Ticks ?? DateTime.UtcNow.Ticks;
+        if (now - prior.UsnTicks > ReplaceWindow.Ticks) return;
+        Deleted?.Invoke(this, new UsnDeletion(prior.RecordNo, prior.Sequence, rec.ParentRecordNo, rec.Name.ToString(), null, -1, false, 0, now, rec.Usn, DeletionKind.Replaced));
     }
 
     /// <summary>Walks a directory that re-entered the tree and maps every new entry to its NTFS record number.</summary>

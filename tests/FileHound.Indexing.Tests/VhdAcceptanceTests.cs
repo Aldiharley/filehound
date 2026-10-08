@@ -8,6 +8,39 @@ namespace FileHound.Indexing.Tests;
 /// <summary>End-to-end undelete on a fresh NTFS volume (VHDX via diskpart). Elevated only.</summary>
 public class VhdAcceptanceTests
 {
+    [Fact, Trait("Category", "Elevated")]
+    public void Deep_scan_carves_a_png_whose_record_was_reused()
+    {
+        if (!Elevation.IsElevated) return;
+        using var vhd = VirtualDisk.Create(Path.Combine(Path.GetTempPath(), $"fh-{Guid.NewGuid():N}.vhd"), out _);
+        if (vhd is null) return;
+        var root = vhd.Root;
+        var png = FileHound.Core.Tests.Carving.SyntheticFiles.Png(64, 64);
+        var filler = new byte[200_000];
+        new Random(7).NextBytes(filler);
+        WriteThrough(root + "photo.png", png);
+        File.Delete(root + "photo.png");
+        // Burn through the freed MFT record (NTFS reuses the lowest free one) so only the clusters remain.
+        for (int i = 0; i < 40; i++) File.WriteAllBytes(root + $"filler{i}.txt", [1, 2, 3]);
+        Thread.Sleep(3000);
+
+        var drive = DriveDiscovery.GetDrives().Single(d => d.Letter == vhd.Letter);
+        using var reader = VolumeReader.Open(drive);
+        var bitmap = ClusterBitmap.Load(reader);
+        var found = new Carver(reader, bitmap) { TypeFilter = ["png"] }.Run(null, CancellationToken.None);
+        string about = $"read path={reader.PathDescription}; bitmap={bitmap.Source}; found={string.Join(", ", found.Select(f => $"{f.SuggestedName}:{f.Size}"))}";
+        var hit = found.SingleOrDefault(f => f.Size == png.Length);
+        Assert.True(hit is not null, about);
+        Assert.Equal("64×64", hit!.Info);
+        var dest = Directory.CreateTempSubdirectory("fh-vhd-carve-").FullName;
+        try
+        {
+            var (_, sha, _) = CarveWriter.Recover(reader, hit, Path.Combine(dest, hit.SuggestedName), CancellationToken.None);
+            Assert.Equal(Sha(png), sha);
+        }
+        finally { Directory.Delete(dest, true); }
+    }
+
     private static string Sha(byte[] b) => Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(b));
 
     /// <summary>Deleting a file before the lazy writer runs discards its cached data unwritten; real deletions come much later, so flush.</summary>

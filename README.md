@@ -73,7 +73,7 @@ The **Recovery** page brings deleted files back, one drive at a time, from these
 | **Recently deleted** | A log of deletions FileHound builds from the NTFS change journal, including files that skipped the bin (Shift+Delete, command line, apps). Each entry shows whether its MFT record is still free | yes | on another drive |
 | **Undelete** | The master file table's deleted records, read raw from the volume (or from the physical disk, or from a shadow copy, when security software blocks volume reads). Each record is graded against the cluster bitmap: *Excellent*, *Good* (header doesn't match the type), *Partially overwritten (N %)*, *Overwritten*, *Zeroed* (SSD TRIM), *Encrypted*. Sparse and LZNT1-compressed files are reassembled | yes | on another drive |
 | **Previous versions** | Windows shadow copies (restore points). Paste a path and every snapshot that still holds it is listed, newest first. *Freeze this drive now* creates a snapshot on demand, after a warning that it writes to the drive | yes | next to the current file as `name (from <date>).ext` (*Restore*) or in any folder (*Save*) |
-| **Deep scan** | a free-space signature scan | yes | coming in the next build; see [`docs/superpowers/specs/2026-10-08-file-recovery-design.md`](docs/superpowers/specs/2026-10-08-file-recovery-design.md) |
+| **Deep scan** | Every free cluster, read for file signatures. 23 validators measure each hit exactly (JPEG, PNG, GIF, BMP, TIFF, WebP, WAV/AVI, MP4/MOV, MKV, OGG, MP3, FLAC, PDF, ZIP incl. docx/xlsx/pptx/epub/odt/jar, 7z, RAR, GZIP, SQLite, EXE/DLL, Office 97-2003, RTF, PST, LNK), so a result is a whole file or nothing. Pause/resume/stop, type filters, previews (images, text, ZIP entries). Results are named `type_block.ext` | yes | on another drive |
 
 Rules that always hold:
 
@@ -82,6 +82,8 @@ Rules that always hold:
 - **Honest grades.** Every candidate carries a chip: *Excellent*, *Recoverable (slot intact)*, *Record reused*, *In Recycle Bin*, *Unknown*. Tooltips say what the grade means and why.
 - **Receipts.** Each recovered file is hashed (SHA-256) and listed in `manifest.csv` inside a `FileHound Recovery <date> <time>` folder; the lists export as CSV, and the session as [DFXML](https://github.com/dfxml-working-group/dfxml_schema) with the byte runs each undeleted file was read from.
 - **Re-checked before copying.** Undelete re-reads the cluster bitmap just before copying a file; clusters reused since the scan downgrade the grade shown in the results instead of being silently copied as if intact.
+- **Consent before the first deep scan.** The page explains once what a deep scan reads (all free space, including other accounts' deleted data), the SSD caveat, and why to use the PC as little as possible meanwhile.
+- **Recovered programs are marked.** Carved `.exe`/`.dll`/scripts get the Mark-of-the-Web, so SmartScreen treats them as downloads.
 
 The deletion log lives in `%LOCALAPPDATA%\FileHound\recovery\<letter>_<serial>.dlog` (last 50,000 deletions per drive) and is backfilled from the journal's history the first time Turbo runs, so deletions from before FileHound was installed show up too, as far back as the journal reaches.
 
@@ -177,10 +179,12 @@ The app also has a QA mode that renders every page to PNG: `FileHound.exe --snap
 
 ```
 FileHound.Core       pure .NET: struct-of-arrays VolumeIndex, query parser, matchers (fzf-style + Myers), SearchEngine, snapshots,
-                     recovery models, Recycle Bin $I parser, deletion-log store, LZNT1 decoder, CSV/DFXML exports
+                     recovery models, Recycle Bin $I parser, deletion-log store, LZNT1 decoder, CSV/DFXML exports,
+                     carving: signature table + 23 pure validators (exact size or reject)
 FileHound.Indexing   Win32: drive discovery, MFT scanner, USN updater, parallel walker, FileSystemWatcher, IndexManager,
                      recovery: deletion log, journal gap oracle, Recycle Bin source, VolumeReader (volume / physical disk /
-                     shadow copy), ClusterBitmap, MftUndeleteSource + UndeleteWriter, ShadowCopySource, RecoverySession
+                     shadow copy), ClusterBitmap, MftUndeleteSource + UndeleteWriter, ShadowCopySource, Carver + CarveWriter,
+                     RecoverySession
 FileHound.App        WPF + CommunityToolkit.Mvvm: clay theme, Dashboard / Search / Drives / Recovery / Settings, tray, hotkey
 tools/FileHound.Cli  headless scan / search / bench / recovery-probe
 ```
@@ -188,6 +192,13 @@ tools/FileHound.Cli  headless scan / search / bench / recovery-probe
 Design docs live in [`docs/superpowers/specs`](docs/superpowers/specs), the implementation plan in [`docs/superpowers/plans`](docs/superpowers/plans), and background research in [`docs/research`](docs/research).
 
 ## Changelog
+
+### 1.4.0
+
+- **Deep scan tab** (Turbo). Reads the drive's free clusters through `VolumeReader` and recognises files by signature with 23 pure validators that walk each format's structure and return an exact size (JPEG marker walk, PNG chunks with CRC, ISO-BMFF boxes, MKV EBML, MP3 frames, ZIP central directory, PE sections, OLE2 FAT, …). Hits are de-duplicated against Undelete, streamed into the list as they are found, filtered by type, sorted by type/size/location, and previewed (images decoded from memory, text snippets, ZIP entry lists). Pause, resume and stop; progress with an ETA in the header chip.
+- **One-time consent** (FR-30) before the first deep scan, remembered in settings.
+- Carved files recover as `type_block.ext` with SHA-256 and byte runs; recovered programs get the Mark-of-the-Web.
+- Every validator is fuzzed in the test suite (random mutations must never throw or report a size past the data).
 
 ### 1.3.0
 

@@ -482,7 +482,7 @@
                     </DockPanel>
 
                     <!-- progress / error / why -->
-                    <StackPanel Grid.Row="2" Margin="4,0,4,6" DataContext="{Binding Undelete}">
+                    <StackPanel Grid.Row="2" Margin="4,0,4,6" DataContext="{Binding Undelete}" Visibility="{Binding IsAvailable, Converter={StaticResource VisibleWhen}}">
                         <DockPanel Margin="0,0,0,8" Visibility="{Binding IsScanning, Converter={StaticResource VisibleWhen}}">
                             <TextBlock DockPanel.Dock="Right" Text="{Binding ProgressText}" Style="{StaticResource Caption}" FontSize="12" Margin="12,0,0,0" VerticalAlignment="Center" />
                             <ProgressBar Style="{StaticResource ClayProgress}" Maximum="1" Value="{Binding Progress, Mode=OneWay}" Foreground="{StaticResource SkyDeep}" Height="8" VerticalAlignment="Center"

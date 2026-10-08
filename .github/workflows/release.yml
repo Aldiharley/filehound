@@ -130,7 +130,7 @@ jobs:
           if ("${{ github.ref_type }}" -ne 'tag') {
             # Manual dry run: a draft creates no tag and is invisible to users; delete it once checked.
             $tag = "v$v-ci-${{ github.run_number }}"
-            gh release create $tag @files --draft --target "${{ github.sha }}" --title "FileHound $v (CI dry run ${{ github.run_number }})" --notes-file release-notes.md
+            gh release create $tag @files --draft --target "${{ github.sha }}" --title "FileHound $v: file search and file recovery for Windows 11 (CI dry run ${{ github.run_number }})" --notes-file release-notes.md
             if ($LASTEXITCODE -ne 0) { throw "gh release create (draft) failed" }
             exit 0
           }
@@ -140,8 +140,8 @@ jobs:
             "Release $tag exists; replacing its files and notes"
             gh release upload $tag @files --clobber
             if ($LASTEXITCODE -ne 0) { throw "gh release upload failed" }
-            gh release edit $tag --title "FileHound $v" --notes-file release-notes.md
+            gh release edit $tag --title "FileHound $v: file search and file recovery for Windows 11" --notes-file release-notes.md
           } else {
-            gh release create $tag @files --verify-tag --title "FileHound $v" --notes-file release-notes.md
+            gh release create $tag @files --verify-tag --title "FileHound $v: file search and file recovery for Windows 11" --notes-file release-notes.md
           }
           if ($LASTEXITCODE -ne 0) { throw "gh release failed" }

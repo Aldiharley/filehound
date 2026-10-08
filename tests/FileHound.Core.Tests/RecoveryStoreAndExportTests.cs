@@ -76,6 +76,50 @@ public class DeletionLogStoreTests
     }
 }
 
+public class DeletionLogStoreDedupTests
+{
+    private static DeletionEntry E(long rec, long usn) => new(rec, 1, 5, $"f{rec}.txt", @"C:\d", 1, false, 0, 0, DeletionKind.Deleted, usn);
+
+    [Fact]
+    public void Duplicates_are_ignored_and_first_last_usn_tracked()
+    {
+        var store = new DeletionLogStore(capacity: 10);
+        Assert.True(store.Add(E(1, 50)));
+        Assert.True(store.Add(E(2, 70)));
+        Assert.False(store.Add(E(1, 50)));          // a replay of the live-captured deletion
+        Assert.True(store.Add(E(1, 20)));           // same record, older USN: a different deletion
+        Assert.Equal(3, store.Count);
+        Assert.Equal(20, store.FirstUsn);
+        Assert.Equal(70, store.LastUsn);
+    }
+
+    [Fact]
+    public void Evicted_entries_can_be_added_again_and_first_usn_remembers_them()
+    {
+        var store = new DeletionLogStore(capacity: 2);
+        store.Add(E(1, 10)); store.Add(E(2, 20)); store.Add(E(3, 30));
+        Assert.Equal(2, store.Count);
+        Assert.Equal(10, store.FirstUsn);
+        Assert.True(store.Add(E(1, 10)));
+    }
+
+    [Fact]
+    public void Failed_save_keeps_the_store_dirty()
+    {
+        var store = new DeletionLogStore();
+        store.Add(E(1, 1));
+        var dir = Directory.CreateTempSubdirectory("fh-dls-");
+        try
+        {
+            var path = Path.Combine(dir.FullName, "x.dlog");
+            Directory.CreateDirectory(path); // a directory where the file should go makes the move fail
+            Assert.ThrowsAny<SystemException>(() => store.Save(path)); // IOException or UnauthorizedAccessException, depending on the OS
+            Assert.True(store.IsDirty);
+        }
+        finally { dir.Delete(true); }
+    }
+}
+
 public class ExportTests
 {
     [Fact]

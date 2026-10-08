@@ -34,15 +34,33 @@ public sealed class RecoverySession : IDisposable
     public IReadOnlyList<RecoveredFile> Recovered => _recovered;
     public string? RecoveryFolder => _recoveryFolder;
 
-    /// <summary>Undelete and carving must never write to the drive they read from; compares volume GUIDs, not letters.</summary>
+    /// <summary>
+    /// Undelete and carving must never write to the drive they read from. Opens the destination and compares the volume
+    /// serial of what the handle lands on (junctions, symlinks and folder mount points resolved) with the source's;
+    /// falls back to volume GUIDs, then to drive letters. Network and unresolvable paths are refused (fail closed).
+    /// </summary>
     public static bool IsDifferentVolume(string destinationFolder, DriveDescriptor source, out string reason)
     {
         reason = "";
-        string? dest = Kernel32.VolumeGuidPathOf(destinationFolder);
-        string? src = Kernel32.VolumeGuidPathOf(source.Root);
-        bool same = dest is not null && src is not null
-            ? string.Equals(dest, src, StringComparison.OrdinalIgnoreCase)
-            : string.Equals(Path.GetPathRoot(Path.GetFullPath(destinationFolder)), source.Root, StringComparison.OrdinalIgnoreCase);
+        string full;
+        try { full = Path.GetFullPath(destinationFolder); }
+        catch (Exception ex) when (ex is ArgumentException or PathTooLongException or NotSupportedException)
+        {
+            reason = "That folder path isn't valid — pick a folder on another local drive";
+            return false;
+        }
+        if (!Path.IsPathFullyQualified(full) || full.StartsWith(@"\\", StringComparison.Ordinal))
+        {
+            reason = "Pick a folder on a local drive, not a network path";
+            return false;
+        }
+        bool same;
+        if (Kernel32.TryGetVolumeSerial(full, out uint destSerial) && Kernel32.TryGetVolumeSerial(source.Root, out uint srcSerial))
+            same = destSerial == srcSerial;
+        else if (Kernel32.VolumeGuidPathOf(full) is { } dest && Kernel32.VolumeGuidPathOf(source.Root) is { } src)
+            same = string.Equals(dest, src, StringComparison.OrdinalIgnoreCase);
+        else
+            same = string.Equals(Path.GetPathRoot(full), source.Root, StringComparison.OrdinalIgnoreCase);
         if (same) reason = $"This is the drive you're recovering from ({source.Letter}:) — pick another drive";
         return !same;
     }
@@ -60,6 +78,9 @@ public sealed class RecoverySession : IDisposable
     {
         if (!IsDifferentVolume(destinationFolder, Drive, out string why) && c.Source is not RecoverySource.RecycleBin)
             return Fail(c, why);
+        // Refuse before creating the recovery folder: nothing to put in it.
+        if (c.Source is RecoverySource.DeletionLog) return Fail(c, "Needs undelete, which is coming in the next build");
+        if (c.Source is not RecoverySource.RecycleBin) return Fail(c, $"{c.Source} recovery is not available yet");
         var folder = _recoveryFolder ??= Path.Combine(destinationFolder, $"FileHound Recovery {StartedUtc.ToLocalTime():yyyy-MM-dd HHmm}");
         RecoveredFile result;
         try
@@ -118,7 +139,7 @@ public sealed class RecoverySession : IDisposable
     }
 
     private static long DirectorySize(string path) =>
-        new DirectoryInfo(path).EnumerateFiles("*", SearchOption.AllDirectories).Sum(f => f.Length);
+        new DirectoryInfo(path).EnumerateFiles("*", new EnumerationOptions { RecurseSubdirectories = true, AttributesToSkip = FileAttributes.ReparsePoint }).Sum(f => f.Length);
 
     public void Dispose()
     {

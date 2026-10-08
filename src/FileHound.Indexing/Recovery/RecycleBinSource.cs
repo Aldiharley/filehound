@@ -133,11 +133,13 @@ public static class RecycleBinSource
         }
     }
 
+    /// <summary>Copies a tree without following junctions or symlinks (a reparse point inside a recycled folder could point anywhere, even at the drive root).</summary>
     private static void CopyTree(string from, string to)
     {
         Directory.CreateDirectory(to);
-        foreach (var f in Directory.EnumerateFiles(from)) File.Copy(f, Path.Combine(to, Path.GetFileName(f)), overwrite: false);
-        foreach (var d in Directory.EnumerateDirectories(from)) CopyTree(d, Path.Combine(to, Path.GetFileName(d)));
+        var options = new EnumerationOptions { AttributesToSkip = FileAttributes.ReparsePoint };
+        foreach (var f in Directory.EnumerateFiles(from, "*", options)) File.Copy(f, Path.Combine(to, Path.GetFileName(f)), overwrite: false);
+        foreach (var d in Directory.EnumerateDirectories(from, "*", options)) CopyTree(d, Path.Combine(to, Path.GetFileName(d)));
     }
 
     private static long SafeLength(string path)

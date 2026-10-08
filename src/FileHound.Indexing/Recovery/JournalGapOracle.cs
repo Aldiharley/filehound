@@ -22,6 +22,16 @@ public static class JournalGapOracle
         return Check(h, recordNo);
     }
 
+    /// <summary>Checks many records on one volume handle; every result is Unknown when the volume cannot be opened (not elevated).</summary>
+    public static SlotState[] CheckMany(char letter, IReadOnlyList<long> recordNos)
+    {
+        var result = new SlotState[recordNos.Count];
+        using var h = Kernel32.OpenVolume(letter);
+        if (h.IsInvalid) { Array.Fill(result, SlotState.Unknown); return result; }
+        for (int i = 0; i < recordNos.Count; i++) result[i] = Check(h, recordNos[i]);
+        return result;
+    }
+
     /// <summary>Same check on an already-open volume handle (one handle for many records).</summary>
     public static unsafe SlotState Check(Microsoft.Win32.SafeHandles.SafeFileHandle volume, long recordNo)
     {

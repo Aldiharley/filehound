@@ -22,6 +22,7 @@ public sealed class DeletionLog : IDisposable
     private readonly CancellationTokenSource _cts = new();
     private readonly Task _saveLoop;
     private volatile bool _suspended;
+    private int _backfilled;
 
     public DeletionLog(UsnUpdater updater, string storePath)
     {
@@ -48,11 +49,19 @@ public sealed class DeletionLog : IDisposable
     /// Reads the journal from its oldest available record up to the newest one already in the store, so deletions that
     /// happened while FileHound was not running are listed. Needs the volume handle (elevated); otherwise a no-op.
     /// </summary>
-    public Task BackfillAsync(CancellationToken ct) => Task.Run(() =>
+    public Task BackfillAsync(CancellationToken ct)
     {
-        long from = _updater.ReplayHistory(_store.LastUsn, ct);
-        if (from >= 0) Changed?.Invoke(this, EventArgs.Empty);
-    }, ct);
+        // Once per process: after a full replay the store covers everything from the journal's start, and the live
+        // updater covers everything after; replaying again would only re-read the journal for nothing.
+        if (Interlocked.CompareExchange(ref _backfilled, 1, 0) != 0) return Task.CompletedTask;
+        return Task.Run(() =>
+        {
+            // Stop at the oldest entry already captured (0 = replay to the journal's end when the store is empty).
+            long from = _updater.ReplayHistory(_store.FirstUsn, ct);
+            if (from < 0 || ct.IsCancellationRequested) Volatile.Write(ref _backfilled, 0);
+            if (from >= 0) Changed?.Invoke(this, EventArgs.Empty);
+        }, ct);
+    }
 
     public void Flush()
     {
@@ -68,9 +77,9 @@ public sealed class DeletionLog : IDisposable
             if (_store.TryMark(d.RecordNo, d.Sequence, DeletionKind.Replaced)) Changed?.Invoke(this, EventArgs.Empty);
             return;
         }
-        _store.Add(new DeletionEntry(d.RecordNo, d.Sequence, d.ParentRecordNo, d.Name, d.ParentPath ?? "", d.Size, d.IsDirectory,
-            d.ModifiedUtcTicks, d.DeletedUtcTicks, d.Kind, d.Usn));
-        Changed?.Invoke(this, EventArgs.Empty);
+        if (_store.Add(new DeletionEntry(d.RecordNo, d.Sequence, d.ParentRecordNo, d.Name, d.ParentPath ?? "", d.Size, d.IsDirectory,
+                d.ModifiedUtcTicks, d.DeletedUtcTicks, d.Kind, d.Usn)))
+            Changed?.Invoke(this, EventArgs.Empty);
     }
 
     private async Task SaveLoopAsync()

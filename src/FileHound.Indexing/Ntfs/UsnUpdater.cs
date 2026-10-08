@@ -146,7 +146,8 @@ public sealed class UsnUpdater : IDisposable
     /// <summary>History replay: raise <see cref="Deleted"/> for deletes and leaves-tree renames without touching the index.</summary>
     private void ReplayDeletions(ReadOnlySpan<byte> records, long stopUsn)
     {
-        _index.Lock.EnterReadLock();
+        // Write lock (not read): RaiseDeleted/NoteReplacement mutate _recentDeletes, and two replays may overlap.
+        _index.Lock.EnterWriteLock();
         try
         {
             while (UsnRecordParser.TryRead(records, out var rec))
@@ -157,7 +158,9 @@ public sealed class UsnUpdater : IDisposable
                 bool parentIndexed = parent == VolumeIndex.RootEntry || _index.IsLive(parent);
                 if ((rec.Reason & UsnReason.FileDelete) != 0)
                 {
-                    RaiseDeleted(rec, -1, parent, parentIndexed, DeletionKind.Deleted);
+                    // Without a resolvable parent the entry would be an "<unknown folder>" row, which in practice is the
+                    // second half of a POSIX delete or an emptied Recycle Bin ($R...), both already covered.
+                    if (parentIndexed && !IsPosixDeleteMarker(rec)) RaiseDeleted(rec, -1, parent, parentIndexed, DeletionKind.Deleted);
                 }
                 else if ((rec.Reason & UsnReason.RenameNewName) != 0)
                 {
@@ -167,7 +170,7 @@ public sealed class UsnUpdater : IDisposable
                 else if ((rec.Reason & UsnReason.FileCreate) != 0) NoteReplacement(rec);
             }
         }
-        finally { _index.Lock.ExitReadLock(); }
+        finally { _index.Lock.ExitWriteLock(); }
     }
 
     /// <summary>Applies a buffer of USN records (without the leading 8-byte USN). Returns the number of changes.</summary>
@@ -197,7 +200,9 @@ public sealed class UsnUpdater : IDisposable
                 }
                 if ((rec.Reason & UsnReason.FileDelete) != 0)
                 {
-                    RaiseDeleted(rec, e, parent, parentIndexed, DeletionKind.Deleted);
+                    // An unindexed file in an unindexed folder is the tail of a POSIX delete ($Extend\$Deleted) or an
+                    // emptied Recycle Bin: the deletion was already logged when the file left the tree.
+                    if (e > 0 || (parentIndexed && !IsPosixDeleteMarker(rec))) RaiseDeleted(rec, e, parent, parentIndexed, DeletionKind.Deleted);
                     if (e > 0) { _index.Delete(e); changes++; }
                     continue;
                 }
@@ -299,7 +304,18 @@ public sealed class UsnUpdater : IDisposable
                 return DeletionKind.Recycled;
             return null;
         }
+        // $Recycle.Bin is never indexed (MftScanner skips it), so a move into it shows up as a rename to an unindexed
+        // parent; the new name tells it apart: the shell renames the file to $R + 6 random characters + extension.
+        if (!newParentIndexed && IsRecycleBinDataName(rec.Name)) return DeletionKind.Recycled;
         return newParentIndexed ? null : DeletionKind.Deleted;
+    }
+
+    /// <summary><c>$R</c> followed by six letters or digits, then the original extension (or nothing).</summary>
+    internal static bool IsRecycleBinDataName(ReadOnlySpan<char> name)
+    {
+        if (name.Length < 8 || name[0] != '$' || name[1] != 'R') return false;
+        for (int i = 2; i < 8; i++) if (!char.IsAsciiLetterOrDigit(name[i])) return false;
+        return name.Length == 8 || name[8] == '.';
     }
 
     /// <summary>

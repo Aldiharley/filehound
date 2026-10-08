@@ -42,7 +42,8 @@ public sealed record RecycleBinMetadata(int Version, long Size, DateTime Deleted
             default:
                 return false;
         }
-        if (path.Length == 0) return false;
+        // A relative path here would make Restore move the file relative to the working directory.
+        if (path.Length == 0 || !Path.IsPathFullyQualified(path)) return false;
         meta = new RecycleBinMetadata((int)version, size, deleted, path);
         return true;
     }

@@ -105,6 +105,64 @@ public class DeletionEventTests
         Assert.Equal(0, raised);
         Assert.True(index.FindByPath(@"Q:\Other\m.txt") > 0);
     }
+
+    [Fact]
+    public void Rename_into_unindexed_recycle_bin_is_recycled()
+    {
+        // On a real volume $Recycle.Bin is skipped by the scanner, so the destination is unknown; the $R name tells.
+        var (index, docs) = IndexWithDocs();
+        int f = index.Add(docs, "b.txt", 0, 1, 1, recordNo: 200);
+        using var u = new UsnUpdater(index, 'Q', TimeSpan.FromSeconds(1));
+        UsnDeletion? got = null;
+        u.Deleted += (_, d) => got = d;
+
+        u.ApplyBuffer(UsnRecordParserTests.V2(200, 31, "$RA1B2C3.txt", UsnReason.RenameNewName | UsnReason.Close));
+
+        Assert.Equal(DeletionKind.Recycled, got!.Kind);
+        Assert.Equal("b.txt", got.Name);
+        Assert.Equal(@"Q:\Docs", got.ParentPath);
+        Assert.False(index.IsLive(f));
+    }
+
+    [Theory]
+    [InlineData("$RA1B2C3.txt", true)]
+    [InlineData("$RA1B2C3", true)]
+    [InlineData("$RA1B2C3D.txt", false)]
+    [InlineData("$R.txt", false)]
+    [InlineData("$IA1B2C3.txt", false)]
+    [InlineData("report.txt", false)]
+    public void Recycle_bin_data_name_pattern(string name, bool expected) => Assert.Equal(expected, UsnUpdater.IsRecycleBinDataName(name));
+
+    [Fact]
+    public void Delete_of_unknown_file_in_unknown_folder_is_not_logged()
+    {
+        // Emptying the bin deletes $R… files under an unindexed SID folder; they were logged when they left the tree.
+        var (index, _) = IndexWithDocs();
+        using var u = new UsnUpdater(index, 'Q', TimeSpan.FromSeconds(1));
+        int raised = 0;
+        u.Deleted += (_, _) => raised++;
+        u.ApplyBuffer(UsnRecordParserTests.V2(999, 777, "$RA1B2C3.txt", UsnReason.FileDelete | UsnReason.Close));
+        Assert.Equal(0, raised);
+    }
+
+    [Fact]
+    public void Posix_delete_tail_is_not_logged_twice()
+    {
+        var index = new VolumeIndex(@"Q:\", IndexMode.Turbo);
+        index.SetRecord(0, 5);
+        int ext = index.Add(0, "$Extend", EntryFlags.Directory, 0, 0, recordNo: 11);
+        index.Add(ext, "$Deleted", EntryFlags.Directory, 0, 0, recordNo: 12);
+        index.Add(0, "notes.md", 0, 9, 9, recordNo: 0x1234);
+        using var u = new UsnUpdater(index, 'Q', TimeSpan.FromSeconds(1));
+        var kinds = new List<DeletionKind>();
+        u.Deleted += (_, d) => kinds.Add(d.Kind);
+
+        const string marker = "0003000000001234" + "00000001";
+        u.ApplyBuffer(UsnRecordParserTests.V2(0x1234, 12, marker, UsnReason.RenameNewName | UsnReason.Close, sequence: 3));
+        u.ApplyBuffer(UsnRecordParserTests.V2(0x1234, 12, marker, UsnReason.FileDelete | UsnReason.Close, sequence: 3));
+
+        Assert.Single(kinds);
+    }
 }
 
 public sealed class RecycleBinSourceTests : IDisposable

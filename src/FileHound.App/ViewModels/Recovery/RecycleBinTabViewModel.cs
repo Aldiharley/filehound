@@ -10,6 +10,7 @@ namespace FileHound.App.ViewModels.Recovery;
 public sealed partial class RecycleBinTabViewModel : ObservableObject
 {
     private List<RecoveryItem> _all = [];
+    private RecoverySession? _session;
 
     public ObservableCollection<RecoveryItem> Items { get; } = [];
 
@@ -22,9 +23,11 @@ public sealed partial class RecycleBinTabViewModel : ObservableObject
     public event EventHandler? SelectionChanged;
 
     partial void OnFilterChanged(string value) => Apply();
+    partial void OnShowAllUsersChanged(bool value) => _ = LoadAsync(_session);
 
     public async Task LoadAsync(RecoverySession? session)
     {
+        _session = session;
         if (session is null) { _all = []; Apply(); return; }
         IsLoading = true;
         try

@@ -40,6 +40,7 @@ public sealed class DeletionLogStore
     private readonly DeletionEntry[] _ring;
     private int _start; // index of the oldest entry
     private int _count;
+    private readonly HashSet<(long RecordNo, ushort Sequence, long Usn)> _keys = [];
     private readonly object _gate = new();
 
     public DeletionLogStore(int capacity = 50_000)
@@ -49,14 +50,20 @@ public sealed class DeletionLogStore
 
     public int Count { get { lock (_gate) return _count; } }
     public long LastUsn { get; private set; }
+    /// <summary>The lowest USN ever added (evicted entries included), so a history replay stops where the log begins.</summary>
+    public long FirstUsn { get; private set; }
     public bool IsDirty { get; private set; }
 
-    public void Add(DeletionEntry e)
+    /// <summary>Adds an entry; returns false for a duplicate (same record, sequence and USN), which happens when a journal replay overlaps live capture.</summary>
+    public bool Add(DeletionEntry e)
     {
         lock (_gate)
         {
+            if (!_keys.Add((e.RecordNo, e.Sequence, e.Usn))) return false;
             if (_count == _ring.Length)
             {
+                var old = _ring[_start];
+                _keys.Remove((old.RecordNo, old.Sequence, old.Usn));
                 _ring[_start] = e;
                 _start = (_start + 1) % _ring.Length;
             }
@@ -66,7 +73,9 @@ public sealed class DeletionLogStore
                 _count++;
             }
             if (e.Usn > LastUsn) LastUsn = e.Usn;
+            if (FirstUsn == 0 || e.Usn < FirstUsn) FirstUsn = e.Usn;
             IsDirty = true;
+            return true;
         }
     }
 
@@ -105,7 +114,6 @@ public sealed class DeletionLogStore
         {
             entries = new DeletionEntry[_count];
             for (int i = 0; i < _count; i++) entries[i] = _ring[(_start + i) % _ring.Length];
-            IsDirty = false;
         }
         Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(path))!);
         var ms = new MemoryStream();
@@ -132,6 +140,8 @@ public sealed class DeletionLogStore
             fs.Write(trailer);
         }
         File.Move(tmp, path, overwrite: true);
+        // Only after the write succeeded; a failed save keeps the store dirty for the next attempt.
+        lock (_gate) IsDirty = false;
     }
 
     /// <summary>Loads a store; returns an empty one when the file is missing or corrupt.</summary>

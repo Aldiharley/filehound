@@ -20,6 +20,8 @@ public sealed partial class RecoveryViewModel : ObservableObject
     private readonly Action<string> _toast;
     private readonly Action _enableTurbo;
     private RecoverySession? _session;
+    private DeletionLog? _subscribedLog;
+    private bool _reloadQueued;
     private readonly Func<IndexManager, DriveDescriptor, RecoverySession> _sessionFactory;
 
     public RecoveryViewModel(IndexManager manager, bool isElevated, Action<string> toast, Action enableTurbo,
@@ -91,18 +93,40 @@ public sealed partial class RecoveryViewModel : ObservableObject
 
     private async Task OpenSessionAsync(DriveItem? drive)
     {
-        _session?.Dispose();
-        _session = null;
-        HasSession = false;
+        CloseSession();
         if (drive is null) return;
         var descriptor = _manager.Drives.FirstOrDefault(s => s.Drive.Letter == drive.Letter)?.Drive;
         if (descriptor is null) return;
-        _session = _sessionFactory(_manager, descriptor);
+        var session = _session = _sessionFactory(_manager, descriptor);
         HasSession = true;
         RecoveryFolder = null;
-        if (_session.Log is { } log) log.Changed += (_, _) => Application.Current?.Dispatcher.InvokeAsync(Deleted.Reload);
-        await Task.WhenAll(RecycleBin.LoadAsync(_session), Deleted.LoadAsync(_session));
+        if (session.Log is { } log)
+        {
+            _subscribedLog = log;
+            log.Changed += OnLogChanged;
+        }
+        await Task.WhenAll(RecycleBin.LoadAsync(session), Deleted.LoadAsync(session));
         UpdateSelection();
+    }
+
+    /// <summary>Coalesces bursts of log changes (a folder delete raises one per file) into one reload per dispatcher pass.</summary>
+    private void OnLogChanged(object? sender, EventArgs e)
+    {
+        if (_reloadQueued) return;
+        _reloadQueued = true;
+        Application.Current?.Dispatcher.InvokeAsync(() =>
+        {
+            _reloadQueued = false;
+            if (_session is not null && !IsBusy) Deleted.Reload();
+        }, System.Windows.Threading.DispatcherPriority.Background);
+    }
+
+    private void CloseSession()
+    {
+        if (_subscribedLog is { } log) { log.Changed -= OnLogChanged; _subscribedLog = null; }
+        _session?.Dispose();
+        _session = null;
+        HasSession = false;
     }
 
     private void UpdateSelection()
@@ -132,7 +156,10 @@ public sealed partial class RecoveryViewModel : ObservableObject
     [RelayCommand]
     private async Task Recover()
     {
-        if (_session is null || !CanRecover) return;
+        // Captured once: the field can be cleared by a drive change or by leaving the page while this runs, and the
+        // batch should finish against the session it started with.
+        var session = _session;
+        if (session is null || !CanRecover) return;
         var items = (CurrentTab == RecoveryTab.RecycleBin ? RecycleBin.Selected : Deleted.Selected).ToList();
         IsBusy = true;
         CanRecover = false;
@@ -149,13 +176,13 @@ public sealed partial class RecoveryViewModel : ObservableObject
                 {
                     if (IsRestoreTab)
                     {
-                        string path = await _session.RestoreAsync(it.Candidate, keepBoth: true);
+                        string path = await session.RestoreAsync(it.Candidate, keepBoth: true);
                         it.ApplyRestore(path);
                         ok++;
                     }
                     else
                     {
-                        var r = await _session.RecoverAsync(it.Candidate, DestinationFolder!, CancellationToken.None);
+                        var r = await session.RecoverAsync(it.Candidate, DestinationFolder!, CancellationToken.None);
                         it.ApplyOutcome(r);
                         if (r.Succeeded) { ok++; bytes += r.Bytes; }
                     }
@@ -169,10 +196,10 @@ public sealed partial class RecoveryViewModel : ObservableObject
                 done++;
             }
             Progress = 1;
-            RecoveryFolder = _session.RecoveryFolder;
+            RecoveryFolder = session.RecoveryFolder;
             if (IsRestoreTab) _toast(ok == items.Count ? $"{ok} item{(ok == 1 ? "" : "s")} restored" : $"{ok} of {items.Count} restored — see the list for details");
             else _toast(ok == items.Count ? $"{ok} file{(ok == 1 ? "" : "s")} recovered ({Formatting.Size(bytes)}) in {sw.Elapsed.TotalSeconds:F0}s" : $"{ok} of {items.Count} recovered — see the list for details");
-            if (IsRestoreTab) await RecycleBin.LoadAsync(_session);
+            if (IsRestoreTab && ReferenceEquals(session, _session)) await RecycleBin.LoadAsync(session);
         }
         finally
         {
@@ -223,8 +250,7 @@ public sealed partial class RecoveryViewModel : ObservableObject
     /// <summary>Closes the session (resumes FileHound's writes to the drive). Called when the page is left.</summary>
     public void Deactivate()
     {
-        _session?.Dispose();
-        _session = null;
-        HasSession = false;
+        Deleted.Cancel();
+        CloseSession();
     }
 }

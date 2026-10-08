@@ -34,6 +34,13 @@ public sealed class EnumEqualsConverter : IValueConverter
         value is true && parameter is string s ? Enum.Parse(targetType, s) : Binding.DoNothing;
 }
 
+/// <summary>Negates a bool (for IsEnabled bindings on busy flags).</summary>
+public sealed class InvertBoolConverter : IValueConverter
+{
+    public object Convert(object? value, Type targetType, object? parameter, CultureInfo culture) => value is not true;
+    public object ConvertBack(object? value, Type targetType, object? parameter, CultureInfo culture) => value is not true;
+}
+
 /// <summary>Multiplies a 0..1 fraction by the parameter width (for simple bar fills).</summary>
 public sealed class FractionToWidthConverter : IMultiValueConverter
 {

@@ -98,6 +98,21 @@ internal static unsafe partial class Kernel32
         return true;
     }
 
+    /// <summary>
+    /// Volume serial number of the volume that actually holds <paramref name="path"/>: the handle follows junctions,
+    /// symlinks and folder mount points, so this cannot be fooled the way a drive-letter comparison can.
+    /// </summary>
+    public static bool TryGetVolumeSerial(string path, out uint serial)
+    {
+        serial = 0;
+        using var h = CreateFile(path, FILE_READ_ATTRIBUTES, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, 0, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, 0);
+        if (h.IsInvalid) return false;
+        byte* info = stackalloc byte[52]; // BY_HANDLE_FILE_INFORMATION
+        if (!GetFileInformationByHandle(h, info)) return false;
+        serial = *(uint*)(info + 28); // dwVolumeSerialNumber
+        return true;
+    }
+
     /// <summary>Opens a volume handle such as <c>\\.\C:</c> (requires elevation).</summary>
     public static SafeFileHandle OpenVolume(char letter) =>
         CreateFile($@"\\.\{char.ToUpperInvariant(letter)}:", GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, 0, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, 0);

@@ -6,6 +6,7 @@
     <UserControl.Resources>
         <c:VisibleWhenConverter x:Key="VisibleWhen" />
         <c:EnumEqualsConverter x:Key="EnumEquals" />
+        <c:InvertBoolConverter x:Key="Invert" />
 
         <!-- Drive pills in the drive strip -->
         <Style x:Key="DrivePill" TargetType="ListBoxItem">
@@ -153,6 +154,7 @@
                     <TextBlock Text="Drive" Style="{StaticResource BodyStrong}" VerticalAlignment="Center" Margin="0,0,12,0" />
                     <ListBox ItemsSource="{Binding Drives}" SelectedItem="{Binding SelectedDrive, Mode=TwoWay}" Background="Transparent" BorderThickness="0" Padding="0"
                              ItemContainerStyle="{StaticResource DrivePill}" VerticalAlignment="Center" AutomationProperties.Name="Drive to recover from"
+                             IsEnabled="{Binding IsBusy, Converter={StaticResource Invert}}"
                              ScrollViewer.HorizontalScrollBarVisibility="Disabled" ScrollViewer.VerticalScrollBarVisibility="Disabled">
                         <ListBox.ItemsPanel>
                             <ItemsPanelTemplate><WrapPanel /></ItemsPanelTemplate>

@@ -19,17 +19,29 @@ public sealed partial class DeletedTabViewModel : ObservableObject
 
     private RecoverySession? _session;
     private List<RecoveryItem> _all = [];
-    private CancellationTokenSource? _checkCts;
-    private readonly Func<char, long, SlotState> _slotCheck;
+    private CancellationTokenSource? _loadCts;
+    private readonly Func<char, IReadOnlyList<long>, SlotState[]> _slotCheck;
 
-    public DeletedTabViewModel(Func<char, long, SlotState>? slotCheck = null)
+    /// <param name="slotCheck">Checks a batch of MFT record numbers on one volume handle; the default uses <see cref="JournalGapOracle"/>.</param>
+    public DeletedTabViewModel(Func<char, IReadOnlyList<long>, SlotState[]>? slotCheck = null)
     {
-        _slotCheck = slotCheck ?? ((letter, rec) => JournalGapOracle.Check(letter, rec) switch
+        _slotCheck = slotCheck ?? CheckSlots;
+    }
+
+    private static SlotState[] CheckSlots(char letter, IReadOnlyList<long> records) =>
+        JournalGapOracle.CheckMany(letter, records).Select(s => s switch
         {
             JournalGapOracle.SlotState.Free => SlotState.Free,
             JournalGapOracle.SlotState.Reused => SlotState.Reused,
             _ => SlotState.Unknown,
-        });
+        }).ToArray();
+
+    /// <summary>Stops the backfill and slot checks in flight (drive change, leaving the page).</summary>
+    public void Cancel()
+    {
+        _loadCts?.Cancel();
+        _loadCts?.Dispose();
+        _loadCts = null;
     }
 
     public ObservableCollection<RecoveryItem> Items { get; } = [];
@@ -62,16 +74,19 @@ public sealed partial class DeletedTabViewModel : ObservableObject
 
     public async Task LoadAsync(RecoverySession? session)
     {
+        Cancel();
         _session = session;
-        _checkCts?.Cancel();
-        if (session?.Log is null) { IsAvailable = false; _all = []; Apply(); return; }
+        _all = [];
+        if (session?.Log is null) { IsAvailable = false; Apply(); return; }
         IsAvailable = true;
         IsLoading = true;
+        var cts = _loadCts = new CancellationTokenSource();
         try
         {
-            await session.Log.BackfillAsync(CancellationToken.None);
-            Reload();
+            await session.Log.BackfillAsync(cts.Token);
+            if (!cts.IsCancellationRequested) Reload();
         }
+        catch (OperationCanceledException) { }
         finally { IsLoading = false; }
     }
 
@@ -81,8 +96,16 @@ public sealed partial class DeletedTabViewModel : ObservableObject
         if (_session?.Log is null) return;
         var now = DateTime.UtcNow;
         var entries = _session.Log.Entries;
-        var items = entries.Select(e => new RecoveryItem(ToCandidate(e), now)).ToList();
-        foreach (var it in items) it.PropertyChanged += (_, e) => { if (e.PropertyName == nameof(RecoveryItem.IsSelected)) SelectionChanged?.Invoke(this, EventArgs.Empty); };
+        // Keep what the user already has: ticks and finished slot checks survive a reload of the same entries.
+        var previous = _all.ToDictionary(i => Key(((DeletionLogItem)i.Candidate.Key).Entry), i => i);
+        var items = new List<RecoveryItem>(entries.Count);
+        foreach (var e in entries)
+        {
+            if (previous.TryGetValue(Key(e), out var old) && ((DeletionLogItem)old.Candidate.Key).Entry.Kind == e.Kind) { items.Add(old); continue; }
+            var it = new RecoveryItem(ToCandidate(e), now);
+            it.PropertyChanged += (_, a) => { if (a.PropertyName == nameof(RecoveryItem.IsSelected)) SelectionChanged?.Invoke(this, EventArgs.Empty); };
+            items.Add(it);
+        }
         _all = items;
         if (entries.Count > 0)
         {
@@ -93,6 +116,8 @@ public sealed partial class DeletedTabViewModel : ObservableObject
         Apply();
         _ = CheckSlotsAsync();
     }
+
+    private static (long, ushort, long) Key(DeletionEntry e) => (e.RecordNo, e.Sequence, e.Usn);
 
     public static RecoveryCandidate ToCandidate(DeletionEntry e) => new(
         RecoverySource.DeletionLog, e.Name, e.ParentPath.Length == 0 ? null : e.ParentPath, e.Size,
@@ -118,32 +143,38 @@ public sealed partial class DeletedTabViewModel : ObservableObject
         IsEmpty = _all.Count == 0;
     }
 
-    /// <summary>Computes slot states off the UI thread, 200 rows at a time, visible rows first.</summary>
+    private bool _checking;
+
+    /// <summary>Computes slot states off the UI thread, 200 rows per volume handle, visible rows first.</summary>
     private async Task CheckSlotsAsync()
     {
-        _checkCts?.Cancel();
-        var cts = _checkCts = new CancellationTokenSource();
+        if (_checking) return; // a running pass picks up newly pending rows on its next batch
         var session = _session;
-        if (session is null) return;
-        var pending = Items.Concat(_all).Distinct().Where(i => i.Candidate.Key is DeletionLogItem { Slot: SlotState.Pending, Kind: DeletionKind.Deleted }).ToList();
-        for (int start = 0; start < pending.Count && !cts.IsCancellationRequested; start += 200)
+        var cts = _loadCts;
+        if (session is null || cts is null) return;
+        _checking = true;
+        try
         {
-            var batch = pending.Skip(start).Take(200).ToList();
-            await Task.Run(() =>
+            while (!cts.IsCancellationRequested)
             {
-                foreach (var it in batch)
+                var batch = Items.Concat(_all).Distinct().Where(i => i.Candidate.Key is DeletionLogItem { Slot: SlotState.Pending, Kind: DeletionKind.Deleted }).Take(200).ToList();
+                if (batch.Count == 0) break;
+                var records = batch.Select(i => ((DeletionLogItem)i.Candidate.Key).Entry.RecordNo).ToList();
+                char letter = session.Drive.Letter;
+                SlotState[] states;
+                try { states = await Task.Run(() => _slotCheck(letter, records)); }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { break; }
+                if (cts.IsCancellationRequested) break;
+                for (int i = 0; i < batch.Count; i++)
                 {
-                    if (cts.IsCancellationRequested) return;
-                    var d = (DeletionLogItem)it.Candidate.Key;
-                    d.Slot = _slotCheck(session.Drive.Letter, d.Entry.RecordNo);
+                    var it = batch[i];
+                    ((DeletionLogItem)it.Candidate.Key).Slot = states[i];
+                    var (key, text, tip) = RecoveryItem.Describe(it.Candidate);
+                    it.GradeKey = key; it.GradeText = text; it.GradeTooltip = tip;
                 }
-            }, cts.Token);
-            foreach (var it in batch)
-            {
-                var (key, text, tip) = RecoveryItem.Describe(it.Candidate);
-                it.GradeKey = key; it.GradeText = text; it.GradeTooltip = tip;
             }
         }
+        finally { _checking = false; }
     }
 
     public IReadOnlyList<RecoveryItem> Selected => _all.Where(i => i.IsSelected).ToList();

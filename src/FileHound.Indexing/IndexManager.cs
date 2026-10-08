@@ -100,23 +100,24 @@ public sealed class IndexManager : IAsyncDisposable
     public void SetExcludedPaths(IEnumerable<string> paths) => _excluded = paths.ToArray();
 
     /// <summary>Stops FileHound's own writes (snapshots, deletion log) to a drive while a recovery session reads it.</summary>
-    public void SuspendWrites(char letter)
-    {
-        Slot? slot;
-        lock (_gate) _slots.TryGetValue(char.ToUpperInvariant(letter), out slot);
-        if (slot is null) return;
-        slot.WritesSuspended = true;
-        slot.DeletionLog?.SuspendPersistence(true);
-    }
+    public void SuspendWrites(char letter) => SetWritesSuspended(letter, true);
 
     /// <summary>Allows writes to the drive again and flushes what was held back.</summary>
-    public void ResumeWrites(char letter)
+    public void ResumeWrites(char letter) => SetWritesSuspended(letter, false);
+
+    private void SetWritesSuspended(char letter, bool suspended)
     {
-        Slot? slot;
-        lock (_gate) _slots.TryGetValue(char.ToUpperInvariant(letter), out slot);
-        if (slot is null) return;
-        slot.WritesSuspended = false;
-        slot.DeletionLog?.SuspendPersistence(false);
+        letter = char.ToUpperInvariant(letter);
+        // Every drive's snapshot and deletion log live in the data directory; when that sits on the drive being
+        // recovered (usually C:), all of them must pause, not just that drive's own files.
+        bool holdsDataDirectory = Path.GetPathRoot(Path.GetFullPath(_options.DataDirectory)) is { Length: > 0 } root && char.ToUpperInvariant(root[0]) == letter;
+        List<Slot> slots;
+        lock (_gate) slots = holdsDataDirectory ? _slots.Values.ToList() : _slots.TryGetValue(letter, out var one) ? [one] : [];
+        foreach (var slot in slots)
+        {
+            slot.WritesSuspended = suspended;
+            slot.DeletionLog?.SuspendPersistence(suspended);
+        }
     }
 
     /// <summary>The drive's deletion log, when it runs in Turbo mode (needs the USN journal); otherwise null.</summary>

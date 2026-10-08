@@ -41,6 +41,10 @@ public sealed class IndexManager : IAsyncDisposable
         public VolumeIndex? Index;
         public DriveState State = new(drive, IndexMode.Standard, DriveStatus.Loading, 0, 0, 0, false, null, null);
         public IDisposable? Updater;
+        /// <summary>The deletion log fed by the Turbo updater (null in Standard mode); disposed together with the updater.</summary>
+        public Recovery.DeletionLog? DeletionLog;
+        /// <summary>Set while a recovery session is open on this drive: no snapshot or deletion-log writes to it.</summary>
+        public volatile bool WritesSuspended;
         public CancellationTokenSource Cts = new();
         public Task Work = Task.CompletedTask;
         public readonly SemaphoreSlim Gate = new(1, 1);
@@ -94,6 +98,32 @@ public sealed class IndexManager : IAsyncDisposable
 
     /// <summary>Folders to skip from now on (applied on the next scan or rescan of each drive).</summary>
     public void SetExcludedPaths(IEnumerable<string> paths) => _excluded = paths.ToArray();
+
+    /// <summary>Stops FileHound's own writes (snapshots, deletion log) to a drive while a recovery session reads it.</summary>
+    public void SuspendWrites(char letter)
+    {
+        Slot? slot;
+        lock (_gate) _slots.TryGetValue(char.ToUpperInvariant(letter), out slot);
+        if (slot is null) return;
+        slot.WritesSuspended = true;
+        slot.DeletionLog?.SuspendPersistence(true);
+    }
+
+    /// <summary>Allows writes to the drive again and flushes what was held back.</summary>
+    public void ResumeWrites(char letter)
+    {
+        Slot? slot;
+        lock (_gate) _slots.TryGetValue(char.ToUpperInvariant(letter), out slot);
+        if (slot is null) return;
+        slot.WritesSuspended = false;
+        slot.DeletionLog?.SuspendPersistence(false);
+    }
+
+    /// <summary>The drive's deletion log, when it runs in Turbo mode (needs the USN journal); otherwise null.</summary>
+    public Recovery.DeletionLog? TryGetDeletionLog(char letter)
+    {
+        lock (_gate) return _slots.TryGetValue(char.ToUpperInvariant(letter), out var slot) ? slot.DeletionLog : null;
+    }
 
     private string IndexDirectory => Path.Combine(_options.DataDirectory, "index");
     private IReadOnlyList<DriveDescriptor> DiscoverDrives() => (_options.DriveSource ?? DriveDiscovery.GetDrives)();
@@ -211,6 +241,7 @@ public sealed class IndexManager : IAsyncDisposable
                 DriveStatus status;
                 lock (_gate) { v = s.Index; status = s.State.Status; }
                 // A partially filled Turbo index may be saved; resume detects and completes missing metadata.
+                if (s.WritesSuspended) continue;   // a recovery session is reading this drive: don't write to it
                 if (v is null || !v.IsDirty || status is not (DriveStatus.Ready or DriveStatus.FillingDetails)) continue;
                 try
                 {
@@ -317,6 +348,9 @@ public sealed class IndexManager : IAsyncDisposable
         usn.JournalInvalid += (_, _) => RequestRescan(drive.Letter, "USN journal invalid");
         usn.Faulted += (_, ex) => OnUpdaterFaulted(slot, "USN updater", ex);
         slot.Updater = usn;
+        slot.DeletionLog?.Dispose();
+        slot.DeletionLog = new Recovery.DeletionLog(usn, Path.Combine(_options.DataDirectory, "recovery", $"{drive.Letter}_{drive.Serial:X8}.dlog"));
+        slot.DeletionLog.SuspendPersistence(slot.WritesSuspended);
         usn.Start();
 
         // The raw $MFT reader delivers sizes and dates itself; enumeration (or a snapshot saved mid-fill) does not.
@@ -427,6 +461,9 @@ public sealed class IndexManager : IAsyncDisposable
 
     private static void DisposeUpdater(Slot slot)
     {
+        // The log subscribes to the updater, so it goes first (and flushes unless writes are suspended).
+        var log = Interlocked.Exchange(ref slot.DeletionLog, null);
+        log?.Dispose();
         var updater = Interlocked.Exchange(ref slot.Updater, null);
         updater?.Dispose();
     }

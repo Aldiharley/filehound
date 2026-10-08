@@ -64,6 +64,20 @@ internal static unsafe partial class Kernel32
         }
     }
 
+    [LibraryImport("kernel32.dll", EntryPoint = "GetVolumeNameForVolumeMountPointW", SetLastError = true, StringMarshalling = StringMarshalling.Utf16)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static partial bool GetVolumeNameForVolumeMountPoint(string mountPoint, char* volumeName, int length);
+
+    /// <summary>The <c>\\?\Volume{GUID}\</c> name of the volume holding <paramref name="path"/>, or null.</summary>
+    public static string? VolumeGuidPathOf(string path)
+    {
+        string? root = Path.GetPathRoot(Path.GetFullPath(path));
+        if (string.IsNullOrEmpty(root)) return null;
+        if (!root.EndsWith('\\')) root += '\\';
+        char* buf = stackalloc char[64];
+        return GetVolumeNameForVolumeMountPoint(root, buf, 64) ? new string(buf) : null;
+    }
+
     public const uint FILE_READ_ATTRIBUTES = 0x80;
     public const uint FILE_SHARE_DELETE = 0x4;
 

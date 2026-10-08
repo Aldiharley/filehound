@@ -200,6 +200,96 @@ public sealed class RecycleBinSourceTests : IDisposable
     }
 }
 
+public sealed class RecoverySessionTests : IDisposable
+{
+    private readonly TempTree _tree = new();
+    private readonly TempTree _data = new();
+    private readonly TempTree _dest = new();
+    private readonly string _sid = System.Security.Principal.WindowsIdentity.GetCurrent().User!.Value;
+
+    public void Dispose() { _tree.Dispose(); _data.Dispose(); _dest.Dispose(); }
+
+    private DriveDescriptor Drive => new('Z', _tree.Root, "NTFS", "Test", 1000, 500, 0x1234, false);
+    private IndexOptions Options() => new(_data.Root, [], PreferTurbo: false, DriveSource: () => [Drive], DrivePollInterval: TimeSpan.FromMilliseconds(200));
+
+    [Fact]
+    public void Same_volume_destination_is_refused()
+    {
+        // The fake drive's root is on the same physical volume as this temp folder.
+        Assert.False(RecoverySession.IsDifferentVolume(_dest.Root, Drive, out var reason));
+        Assert.Contains("pick another drive", reason);
+        var other = DriveInfo.GetDrives().FirstOrDefault(d => d.IsReady && d.DriveType == DriveType.Fixed &&
+            !string.Equals(d.Name, Path.GetPathRoot(_tree.Root), StringComparison.OrdinalIgnoreCase));
+        if (other is not null) Assert.True(RecoverySession.IsDifferentVolume(other.RootDirectory.FullName, Drive, out _));
+    }
+
+    [Fact]
+    public async Task Suspended_writes_skip_the_drive_until_resumed()
+    {
+        _tree.File("a.txt");
+        await using var m = new IndexManager(Options());
+        await m.StartAsync();
+        await m.WaitForIdleAsync();
+        var fhx = Directory.GetFiles(Path.Combine(_data.Root, "index"), "*.fhx").Single();
+        var before = File.GetLastWriteTimeUtc(fhx);
+
+        using (var session = new RecoverySession(m, Drive))
+        {
+            _tree.File("b.txt");
+            TempTree.WaitUntil(() => m.Volumes[0].FindByPath(_tree.Path("b.txt")) > 0);
+            await m.SaveSnapshotsAsync();
+            Assert.Equal(before, File.GetLastWriteTimeUtc(fhx));   // suspended: not rewritten
+        }
+        await m.SaveSnapshotsAsync();
+        Assert.True(File.GetLastWriteTimeUtc(fhx) > before);         // resumed and dirty: written
+    }
+
+    [Fact]
+    public async Task Recovers_recycle_bin_item_with_hash_and_manifest()
+    {
+        var bin = Path.Combine(_tree.Root, "$Recycle.Bin", _sid);
+        Directory.CreateDirectory(bin);
+        byte[] data = [1, 2, 3, 4, 5];
+        File.WriteAllBytes(Path.Combine(bin, "$IABC.bin"), FileHound.Core.Tests.RecycleBinFixtures.V2(Path.Combine(_tree.Root, "x", "secret.bin"), 5, DateTime.UtcNow));
+        File.WriteAllBytes(Path.Combine(bin, "$RABC.bin"), data);
+        await using var m = new IndexManager(Options());
+        await m.StartAsync();
+        await m.WaitForIdleAsync();
+
+        using var session = new RecoverySession(m, Drive);
+        var c = session.RecycleBinCandidates(allUsers: false).Single();
+        var r = await session.RecoverAsync(c, _dest.Root, CancellationToken.None);
+
+        Assert.True(r.Succeeded, r.Error);
+        Assert.Equal(Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(data)), r.Sha256Hex);
+        Assert.Equal(data, File.ReadAllBytes(r.RecoveredPath));
+        Assert.StartsWith(Path.Combine(_dest.Root, "FileHound Recovery "), r.RecoveredPath);
+        var manifest = File.ReadAllLines(Path.Combine(session.RecoveryFolder!, "manifest.csv"));
+        Assert.Equal("original_path,recovered_path,size,sha256,grade,source,error", manifest[0]);
+        Assert.Contains(r.Sha256Hex, manifest[1]);
+        Assert.True(File.Exists(Path.Combine(bin, "$RABC.bin")));   // copy, not move
+
+        var dfxml = Path.Combine(_dest.Root, "session.xml");
+        session.ExportDfxml(dfxml);
+        Assert.Contains("hashdigest", File.ReadAllText(dfxml));
+    }
+
+    [Fact]
+    public async Task Deletion_log_candidates_report_not_yet_recoverable()
+    {
+        await using var m = new IndexManager(Options());
+        await m.StartAsync();
+        await m.WaitForIdleAsync();
+        using var session = new RecoverySession(m, Drive);
+        var c = new RecoveryCandidate(RecoverySource.DeletionLog, "gone.txt", @"Z:\", 1, null, null, RecoveryGrade.Unknown, 0, false, null, 0);
+        var other = DriveInfo.GetDrives().FirstOrDefault(d => d.IsReady && d.DriveType == DriveType.Fixed && !string.Equals(d.Name, Path.GetPathRoot(_tree.Root), StringComparison.OrdinalIgnoreCase));
+        if (other is null) return;
+        var r = await session.RecoverAsync(c, Path.Combine(other.RootDirectory.FullName, "fh-test-never-created"), CancellationToken.None);
+        Assert.False(r.Succeeded);
+        Assert.Contains("undelete", r.Error);
+    }
+}
+
 public class JournalGapOracleTests
 {
     [Fact, Trait("Category", "Elevated")]

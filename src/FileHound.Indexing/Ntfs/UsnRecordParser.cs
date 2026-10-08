@@ -7,17 +7,23 @@ namespace FileHound.Indexing.Ntfs;
 /// <summary>A parsed USN_RECORD_V2/V3 view over a buffer. <see cref="Name"/> points into that buffer.</summary>
 public readonly ref struct UsnRecord
 {
-    public UsnRecord(int length, long recordNo, long parentRecordNo, long usn, UsnReason reason, uint attributes, ReadOnlySpan<char> name)
+    public UsnRecord(int length, long recordNo, ushort sequence, long parentRecordNo, long usn, long timestampFileTime, UsnReason reason, uint attributes, ReadOnlySpan<char> name)
     {
-        Length = length; RecordNo = recordNo; ParentRecordNo = parentRecordNo; Usn = usn; Reason = reason; Attributes = attributes; Name = name;
+        Length = length; RecordNo = recordNo; Sequence = sequence; ParentRecordNo = parentRecordNo; Usn = usn; TimestampFileTime = timestampFileTime;
+        Reason = reason; Attributes = attributes; Name = name;
     }
 
     /// <summary>Total record length in bytes (advance by this to reach the next record).</summary>
     public int Length { get; }
     /// <summary>MFT record number (low 48 bits of the file reference number).</summary>
     public long RecordNo { get; }
+    /// <summary>The record's sequence number (high 16 bits of the file reference); tells a reused record from the original.</summary>
+    public ushort Sequence { get; }
     public long ParentRecordNo { get; }
     public long Usn { get; }
+    /// <summary>FILETIME of the change (0 when unknown).</summary>
+    public long TimestampFileTime { get; }
+    public DateTime? TimestampUtc => TimestampFileTime > 0 && TimestampFileTime < DateTime.MaxValue.ToFileTimeUtc() ? DateTime.FromFileTimeUtc(TimestampFileTime) : null;
     public UsnReason Reason { get; }
     public uint Attributes { get; }
     public ReadOnlySpan<char> Name { get; }
@@ -37,7 +43,7 @@ public static class UsnRecordParser
         if (length < 60 || length > buffer.Length) return false;
         ushort major = BinaryPrimitives.ReadUInt16LittleEndian(buffer[4..]);
         ulong frn, parent;
-        long usn;
+        long usn, timestamp;
         uint reason, attrs;
         int nameLen, nameOffset;
         switch (major)
@@ -46,6 +52,7 @@ public static class UsnRecordParser
                 frn = BinaryPrimitives.ReadUInt64LittleEndian(buffer[8..]);
                 parent = BinaryPrimitives.ReadUInt64LittleEndian(buffer[16..]);
                 usn = BinaryPrimitives.ReadInt64LittleEndian(buffer[24..]);
+                timestamp = BinaryPrimitives.ReadInt64LittleEndian(buffer[32..]);
                 reason = BinaryPrimitives.ReadUInt32LittleEndian(buffer[40..]);
                 attrs = BinaryPrimitives.ReadUInt32LittleEndian(buffer[52..]);
                 nameLen = BinaryPrimitives.ReadUInt16LittleEndian(buffer[56..]);
@@ -58,6 +65,7 @@ public static class UsnRecordParser
                 if (BinaryPrimitives.ReadUInt64LittleEndian(buffer[16..]) != 0) return false;
                 parent = BinaryPrimitives.ReadUInt64LittleEndian(buffer[24..]);
                 usn = BinaryPrimitives.ReadInt64LittleEndian(buffer[40..]);
+                timestamp = BinaryPrimitives.ReadInt64LittleEndian(buffer[48..]);
                 reason = BinaryPrimitives.ReadUInt32LittleEndian(buffer[56..]);
                 attrs = BinaryPrimitives.ReadUInt32LittleEndian(buffer[68..]);
                 nameLen = BinaryPrimitives.ReadUInt16LittleEndian(buffer[72..]);
@@ -68,7 +76,7 @@ public static class UsnRecordParser
         }
         if (nameOffset + nameLen > length || (nameLen & 1) != 0) return false;
         var name = MemoryMarshal.Cast<byte, char>(buffer.Slice(nameOffset, nameLen));
-        record = new UsnRecord(length, (long)(frn & RecordMask), (long)(parent & RecordMask), usn, (UsnReason)reason, attrs, name);
+        record = new UsnRecord(length, (long)(frn & RecordMask), (ushort)(frn >> 48), (long)(parent & RecordMask), usn, timestamp, (UsnReason)reason, attrs, name);
         return true;
     }
 }

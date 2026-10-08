@@ -17,7 +17,7 @@ public static class SnapshotMode
     {
         Directory.CreateDirectory(outDir);
         await Task.Delay(warmup);
-        foreach (var page in new[] { AppPage.Dashboard, AppPage.Search, AppPage.Drives, AppPage.Settings })
+        foreach (var page in new[] { AppPage.Dashboard, AppPage.Search, AppPage.Drives, AppPage.Recovery, AppPage.Settings })
         {
             vm.CurrentPage = page;
             if (page == AppPage.Search)
@@ -28,6 +28,14 @@ public static class SnapshotMode
             await Task.Delay(1200);
             await window.Dispatcher.InvokeAsync(() => { }, DispatcherPriority.ApplicationIdle);
             Save(window, Path.Combine(outDir, $"{page.ToString().ToLowerInvariant()}.png"));
+            if (page == AppPage.Recovery)
+            {
+                vm.Recovery.CurrentTab = ViewModels.Recovery.RecoveryTab.Deleted;
+                await Task.Delay(1200);
+                await window.Dispatcher.InvokeAsync(() => { }, DispatcherPriority.ApplicationIdle);
+                Save(window, Path.Combine(outDir, "recovery-deleted.png"));
+                vm.Recovery.CurrentTab = ViewModels.Recovery.RecoveryTab.RecycleBin;
+            }
         }
         vm.CurrentPage = AppPage.Search;
         vm.Search.QueryText = "";

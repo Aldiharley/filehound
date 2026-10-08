@@ -177,7 +177,8 @@ public sealed class MftScanner
         return false;
     }
 
-    private static unsafe long EstimateRecordCount(Microsoft.Win32.SafeHandles.SafeFileHandle h)
+    /// <summary>Number of MFT records within the MFT's valid data length (in-use and free alike).</summary>
+    internal static unsafe long EstimateRecordCount(Microsoft.Win32.SafeHandles.SafeFileHandle h)
     {
         byte* data = stackalloc byte[128];
         if (!Kernel32.DeviceIoControl(h, FSCTL_GET_NTFS_VOLUME_DATA, null, 0, data, 128, out _, 0)) return 0;

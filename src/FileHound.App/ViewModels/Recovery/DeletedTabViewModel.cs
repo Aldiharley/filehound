@@ -54,6 +54,10 @@ public sealed partial class DeletedTabViewModel : ObservableObject
     [ObservableProperty] private bool _isEmpty = true;
     [ObservableProperty] private bool _isAvailable;
     [ObservableProperty] private string _journalSpanText = "";
+    /// <summary>True when the only thing missing is administrator access (the card offers Enable Turbo).</summary>
+    [ObservableProperty] private bool _needsTurbo;
+    [ObservableProperty] private string _unavailableTitle = "";
+    [ObservableProperty] private string _unavailableText = "";
 
     public event EventHandler? SelectionChanged;
 
@@ -77,7 +81,7 @@ public sealed partial class DeletedTabViewModel : ObservableObject
         Cancel();
         _session = session;
         _all = [];
-        if (session?.Log is null) { IsAvailable = false; Apply(); return; }
+        if (session?.Log is null) { IsAvailable = false; Explain(session); Apply(); return; }
         IsAvailable = true;
         IsLoading = true;
         var cts = _loadCts = new CancellationTokenSource();
@@ -88,6 +92,29 @@ public sealed partial class DeletedTabViewModel : ObservableObject
         }
         catch (OperationCanceledException) { }
         finally { IsLoading = false; }
+    }
+
+    /// <summary>Why there is no deletion log for this drive right now.</summary>
+    private void Explain(RecoverySession? session)
+    {
+        if (session is null) { NeedsTurbo = false; UnavailableTitle = ""; UnavailableText = ""; return; }
+        (NeedsTurbo, UnavailableTitle, UnavailableText) = Describe(session.IsElevated, session.Drive.Letter, session.State);
+    }
+
+    /// <summary>The three reasons a drive has no deletion log, in the order they are checked.</summary>
+    internal static (bool NeedsTurbo, string Title, string Text) Describe(bool elevated, char letter, DriveState? state)
+    {
+        if (!elevated)
+            return (true, "Needs administrator access",
+                "Recently deleted comes from the drive's change journal, which FileHound reads in Turbo mode. Enable Turbo (one administrator approval) and the log fills from the journal's history.");
+        if (state is { Status: DriveStatus.Loading or DriveStatus.Scanning or DriveStatus.FillingDetails })
+            return (false, $"Still indexing {letter}:",
+                $"The deletion log starts as soon as Turbo indexing of {letter}: finishes ({state.Progress:P0} so far). This tab fills in by itself.");
+        if (state is { Mode: IndexMode.Standard })
+            return (false, $"{letter}: is indexed in Standard mode", state.Error is { Length: > 0 } e
+                ? $"Turbo could not read this drive's change journal ({e}), so there is no deletion log for it. Undelete and Deep scan still work."
+                : "This drive has no usable change journal, so there is no deletion log for it. Undelete and Deep scan still work.");
+        return (false, $"No deletion log for {letter}: yet", "The log appears once the drive is indexed in Turbo mode.");
     }
 
     /// <summary>Rebuilds the list from the log (also called when the log reports changes).</summary>

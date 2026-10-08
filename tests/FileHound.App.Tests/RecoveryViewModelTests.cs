@@ -1,6 +1,8 @@
 using FileHound.App.ViewModels.Recovery;
 using FileHound.Core.Recovery;
 using FileHound.Indexing.Recovery;
+using FileHound.Indexing;
+using FileHound.Core.Index;
 
 namespace FileHound.App.Tests;
 
@@ -236,6 +238,39 @@ public class PreviewServiceTests
         Assert.Equal("text", t.Kind);
         Assert.Contains("Hello", t.Text);
         Assert.DoesNotContain("\\rtf", t.Text);
+    }
+}
+
+public class DeletedTabAvailabilityTests
+{
+    private static DriveState State(DriveStatus status, IndexMode mode, double progress = 0, string? error = null) =>
+        new(new DriveDescriptor('O', @"O:\", "NTFS", "Extreme SSD", 1, 1, 1, false), mode, status, 0, progress, 0, true, null, error);
+
+    [Fact]
+    public void Not_elevated_asks_for_turbo()
+    {
+        var (needsTurbo, title, _) = DeletedTabViewModel.Describe(elevated: false, 'O', State(DriveStatus.Ready, IndexMode.Turbo));
+        Assert.True(needsTurbo);
+        Assert.Equal("Needs administrator access", title);
+    }
+
+    [Fact]
+    public void Elevated_but_still_indexing_says_so_with_progress()
+    {
+        var (needsTurbo, title, text) = DeletedTabViewModel.Describe(elevated: true, 'O', State(DriveStatus.Scanning, IndexMode.Turbo, 0.02));
+        Assert.False(needsTurbo);
+        Assert.Equal("Still indexing O:", title);
+        Assert.Contains("2%", text);
+        Assert.Contains("fills in by itself", text);
+    }
+
+    [Fact]
+    public void Standard_mode_drive_explains_the_missing_journal()
+    {
+        var (needsTurbo, title, text) = DeletedTabViewModel.Describe(elevated: true, 'O', State(DriveStatus.Ready, IndexMode.Standard, error: "journal disabled"));
+        Assert.False(needsTurbo);
+        Assert.Equal("O: is indexed in Standard mode", title);
+        Assert.Contains("journal disabled", text);
     }
 }
 

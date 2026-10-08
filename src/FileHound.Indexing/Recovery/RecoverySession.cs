@@ -27,7 +27,6 @@ public sealed class RecoverySession : IDisposable
         Drive = drive;
         IsElevated = Elevation.IsElevated;
         StartedUtc = DateTime.UtcNow;
-        Log = manager.TryGetDeletionLog(drive.Letter);
         manager.SuspendWrites(drive.Letter);
     }
 
@@ -35,7 +34,10 @@ public sealed class RecoverySession : IDisposable
     public bool IsElevated { get; }
     public DateTime StartedUtc { get; }
     /// <summary>The drive's deletion log (null when the drive is not in Turbo mode, i.e. not elevated).</summary>
-    public DeletionLog? Log { get; }
+    /// <summary>Looked up live: a drive still being indexed gets its log only when its Turbo scan finishes.</summary>
+    public DeletionLog? Log => _manager.TryGetDeletionLog(Drive.Letter);
+    /// <summary>The drive's current index state (mode and progress), for explaining why a source is not available yet.</summary>
+    public DriveState? State => _manager.Drives.FirstOrDefault(s => s.Drive.Letter == Drive.Letter);
     public IReadOnlyList<RecoveredFile> Recovered => _recovered;
     public string? RecoveryFolder => _recoveryFolder;
 

@@ -53,7 +53,22 @@ public sealed partial class RecoveryViewModel : ObservableObject
         {
             if (e.PropertyName is nameof(UndeleteTabViewModel.IsScanning) or nameof(UndeleteTabViewModel.Progress)) ScanStateChanged?.Invoke(this, EventArgs.Empty);
         };
-        _manager.StateChanged += (_, _) => Application.Current?.Dispatcher.InvokeAsync(RefreshDrives);
+        _manager.StateChanged += (_, _) => Application.Current?.Dispatcher.InvokeAsync(() => { RefreshDrives(); _ = RefreshDeletedAsync(); });
+    }
+
+    /// <summary>A drive that was still indexing when the session opened gets its deletion log later; attach to it then.</summary>
+    private async Task RefreshDeletedAsync()
+    {
+        var session = _session;
+        if (session is null || IsBusy) return;
+        var log = session.Log;
+        if (!Deleted.IsAvailable && log is not null)
+        {
+            if (_subscribedLog is null) { _subscribedLog = log; log.Changed += OnLogChanged; }
+            await Deleted.LoadAsync(session);
+            UpdateSelection();
+        }
+        else if (!Deleted.IsAvailable) await Deleted.LoadAsync(session);   // refresh the "still indexing … 42%" explanation
     }
 
     public bool IsElevated { get; }

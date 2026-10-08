@@ -343,17 +343,33 @@
                         <RowDefinition Height="*" />
                     </Grid.RowDefinitions>
 
-                    <!-- needs Turbo -->
-                    <c:ClayCard Background="{StaticResource Peach}" CornerRadius="20" Padding="18,14" Margin="2,2,2,8"
+                    <!-- no deletion log: needs Turbo, or the drive is still being indexed -->
+                    <c:ClayCard CornerRadius="20" Padding="18,14" Margin="2,2,2,8"
                                 Visibility="{Binding Deleted.IsAvailable, Converter={StaticResource VisibleWhen}, ConverterParameter=invert}">
+                        <c:ClayCard.Style>
+                            <Style TargetType="c:ClayCard">
+                                <Setter Property="Background" Value="{StaticResource Butter}" />
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding Deleted.NeedsTurbo}" Value="True"><Setter Property="Background" Value="{StaticResource Peach}" /></DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </c:ClayCard.Style>
                         <DockPanel>
                             <Button DockPanel.Dock="Right" Style="{StaticResource ClayButton}" Content="Enable Turbo" Command="{Binding EnableTurboCommand}" VerticalAlignment="Center"
-                                    Visibility="{Binding IsElevated, Converter={StaticResource VisibleWhen}, ConverterParameter=invert}" />
-                            <Image Source="/Assets/icon-bolt.png" Width="48" Height="48" Margin="0,0,14,0" />
+                                    Visibility="{Binding Deleted.NeedsTurbo, Converter={StaticResource VisibleWhen}}" />
+                            <Image Width="48" Height="48" Margin="0,0,14,0" RenderOptions.BitmapScalingMode="HighQuality">
+                                <Image.Style>
+                                    <Style TargetType="Image">
+                                        <Setter Property="Source" Value="/Assets/hound-sniff.png" />
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding Deleted.NeedsTurbo}" Value="True"><Setter Property="Source" Value="/Assets/icon-bolt.png" /></DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </Image.Style>
+                            </Image>
                             <StackPanel VerticalAlignment="Center">
-                                <TextBlock Text="Needs administrator access" Style="{StaticResource Title}" />
-                                <TextBlock Style="{StaticResource Body}" Foreground="#7A4A36" TextWrapping="Wrap" Margin="0,4,16,0"
-                                           Text="Recently deleted comes from the drive's change journal, which FileHound reads in Turbo mode. Enable Turbo (one administrator approval) and the log fills from the journal's history." />
+                                <TextBlock Text="{Binding Deleted.UnavailableTitle}" Style="{StaticResource Title}" />
+                                <TextBlock Text="{Binding Deleted.UnavailableText}" Style="{StaticResource Body}" Foreground="#7A4A36" TextWrapping="Wrap" Margin="0,4,16,0" />
                             </StackPanel>
                         </DockPanel>
                     </c:ClayCard>

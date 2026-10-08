@@ -34,6 +34,15 @@ public static class SnapshotMode
                 await Task.Delay(1200);
                 await window.Dispatcher.InvokeAsync(() => { }, DispatcherPriority.ApplicationIdle);
                 Save(window, Path.Combine(outDir, "recovery-deleted.png"));
+                vm.Recovery.CurrentTab = ViewModels.Recovery.RecoveryTab.Undelete;
+                await Task.Delay(800);
+                await window.Dispatcher.InvokeAsync(() => { }, DispatcherPriority.ApplicationIdle);
+                Save(window, Path.Combine(outDir, "recovery-undelete.png"));
+                vm.Recovery.CurrentTab = ViewModels.Recovery.RecoveryTab.PreviousVersions;
+                vm.Recovery.Versions.Path = @"C:\Windows\System32\drivers\etc\hosts";
+                await Task.Delay(800);
+                await window.Dispatcher.InvokeAsync(() => { }, DispatcherPriority.ApplicationIdle);
+                Save(window, Path.Combine(outDir, "recovery-versions.png"));
                 vm.Recovery.CurrentTab = ViewModels.Recovery.RecoveryTab.RecycleBin;
             }
         }

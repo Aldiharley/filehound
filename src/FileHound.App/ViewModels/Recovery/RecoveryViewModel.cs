@@ -11,7 +11,7 @@ using Microsoft.Win32;
 
 namespace FileHound.App.ViewModels.Recovery;
 
-public enum RecoveryTab { RecycleBin, Deleted }
+public enum RecoveryTab { RecycleBin, Deleted, Undelete, PreviousVersions }
 
 /// <summary>The Recovery page: a drive, a source tab, a selection, a destination, and one Recover/Restore action.</summary>
 public sealed partial class RecoveryViewModel : ObservableObject
@@ -34,14 +34,30 @@ public sealed partial class RecoveryViewModel : ObservableObject
         _sessionFactory = sessionFactory ?? ((m, d) => new RecoverySession(m, d));
         RecycleBin = new RecycleBinTabViewModel();
         Deleted = deletedTab ?? new DeletedTabViewModel();
+        Undelete = new UndeleteTabViewModel();
+        Versions = new PreviousVersionsTabViewModel();
         RecycleBin.SelectionChanged += (_, _) => UpdateSelection();
         Deleted.SelectionChanged += (_, _) => UpdateSelection();
+        Undelete.SelectionChanged += (_, _) => UpdateSelection();
+        Versions.SelectionChanged += (_, _) => UpdateSelection();
+        Versions.Notice += (_, m) => _toast(m);
+        Undelete.PropertyChanged += (_, e) =>
+        {
+            if (e.PropertyName is nameof(UndeleteTabViewModel.IsScanning) or nameof(UndeleteTabViewModel.Progress)) ScanStateChanged?.Invoke(this, EventArgs.Empty);
+        };
         _manager.StateChanged += (_, _) => Application.Current?.Dispatcher.InvokeAsync(RefreshDrives);
     }
 
     public bool IsElevated { get; }
     public RecycleBinTabViewModel RecycleBin { get; }
     public DeletedTabViewModel Deleted { get; }
+    public UndeleteTabViewModel Undelete { get; }
+    public PreviousVersionsTabViewModel Versions { get; }
+
+    /// <summary>Raised when the undelete scan starts, progresses or ends (the header status chip follows it).</summary>
+    public event EventHandler? ScanStateChanged;
+    public bool IsScanning => Undelete.IsScanning;
+    public double ScanProgress => Undelete.Progress;
     public ObservableCollection<DriveItem> Drives { get; } = [];
     public IReadOnlyList<RecoveredFile> Recovered => _session?.Recovered ?? [];
 
@@ -59,9 +75,26 @@ public sealed partial class RecoveryViewModel : ObservableObject
     [ObservableProperty] private string? _recoveryFolder;
     [ObservableProperty] private bool _hasSession;
     [ObservableProperty] private bool _journalBannerDismissed;
+    [ObservableProperty] private bool _canSaveElsewhere;
 
-    /// <summary>Restore puts Recycle Bin items back in place; Recover copies to the destination (different drive).</summary>
-    public bool IsRestoreTab => CurrentTab == RecoveryTab.RecycleBin;
+    /// <summary>Restore puts Recycle Bin items back in place and snapshot versions next to the current file; Recover copies to the destination (different drive).</summary>
+    public bool IsRestoreTab => CurrentTab is RecoveryTab.RecycleBin or RecoveryTab.PreviousVersions;
+
+    private IReadOnlyList<RecoveryItem> CurrentSelected => CurrentTab switch
+    {
+        RecoveryTab.RecycleBin => RecycleBin.Selected,
+        RecoveryTab.Deleted => Deleted.Selected,
+        RecoveryTab.Undelete => Undelete.Selected,
+        _ => Versions.Selected,
+    };
+
+    private IEnumerable<RecoveryItem> CurrentItems => CurrentTab switch
+    {
+        RecoveryTab.RecycleBin => RecycleBin.Items,
+        RecoveryTab.Deleted => Deleted.Items,
+        RecoveryTab.Undelete => Undelete.Items,
+        _ => Versions.Items,
+    };
 
     public void Activate()
     {
@@ -105,7 +138,7 @@ public sealed partial class RecoveryViewModel : ObservableObject
             _subscribedLog = log;
             log.Changed += OnLogChanged;
         }
-        await Task.WhenAll(RecycleBin.LoadAsync(session), Deleted.LoadAsync(session));
+        await Task.WhenAll(RecycleBin.LoadAsync(session), Deleted.LoadAsync(session), Undelete.LoadAsync(session), Versions.LoadAsync(session));
         UpdateSelection();
     }
 
@@ -131,7 +164,7 @@ public sealed partial class RecoveryViewModel : ObservableObject
 
     private void UpdateSelection()
     {
-        var selected = CurrentTab == RecoveryTab.RecycleBin ? RecycleBin.Selected : Deleted.Selected;
+        var selected = CurrentSelected;
         SelectedCount = selected.Count;
         long bytes = selected.Where(i => !i.IsDirectory && i.Candidate.Size > 0).Sum(i => i.Candidate.Size);
         SelectedSummary = SelectedCount == 0 ? "" : $"{SelectedCount} selected · {Formatting.Size(bytes)}";
@@ -144,6 +177,7 @@ public sealed partial class RecoveryViewModel : ObservableObject
             DestinationError = why;
         bool destinationOk = IsRestoreTab || (DestinationFolder is not null && DestinationError is null);
         CanRecover = SelectedCount > 0 && destinationOk && !IsBusy && _session is not null;
+        CanSaveElsewhere = IsRestoreTab && SelectedCount > 0 && !IsBusy && _session is not null;
     }
 
     [RelayCommand]
@@ -154,13 +188,25 @@ public sealed partial class RecoveryViewModel : ObservableObject
     }
 
     [RelayCommand]
-    private async Task Recover()
+    private Task Recover() => CanRecover ? RunBatchAsync(restoreInPlace: IsRestoreTab, DestinationFolder) : Task.CompletedTask;
+
+    /// <summary>On the in-place tabs: copy the selection to a folder of the user's choice instead (any drive).</summary>
+    [RelayCommand]
+    private Task SaveElsewhere()
+    {
+        if (!CanSaveElsewhere) return Task.CompletedTask;
+        var dialog = new OpenFolderDialog { Title = "Save the selected items to…" };
+        return dialog.ShowDialog() == true ? RunBatchAsync(restoreInPlace: false, dialog.FolderName) : Task.CompletedTask;
+    }
+
+    private async Task RunBatchAsync(bool restoreInPlace, string? destination)
     {
         // Captured once: the field can be cleared by a drive change or by leaving the page while this runs, and the
         // batch should finish against the session it started with.
         var session = _session;
-        if (session is null || !CanRecover) return;
-        var items = (CurrentTab == RecoveryTab.RecycleBin ? RecycleBin.Selected : Deleted.Selected).ToList();
+        if (session is null || (!restoreInPlace && destination is null)) return;
+        var items = CurrentSelected.ToList();
+        if (items.Count == 0) return;
         IsBusy = true;
         CanRecover = false;
         int done = 0, ok = 0;
@@ -174,7 +220,7 @@ public sealed partial class RecoveryViewModel : ObservableObject
                 ProgressText = $"{done + 1} of {items.Count} · {it.Name}";
                 try
                 {
-                    if (IsRestoreTab)
+                    if (restoreInPlace)
                     {
                         string path = await session.RestoreAsync(it.Candidate, keepBoth: true);
                         it.ApplyRestore(path);
@@ -182,12 +228,12 @@ public sealed partial class RecoveryViewModel : ObservableObject
                     }
                     else
                     {
-                        var r = await session.RecoverAsync(it.Candidate, DestinationFolder!, CancellationToken.None);
+                        var r = await session.RecoverAsync(it.Candidate, destination!, CancellationToken.None);
                         it.ApplyOutcome(r);
                         if (r.Succeeded) { ok++; bytes += r.Bytes; }
                     }
                 }
-                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException or NotSupportedException)
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException or NotSupportedException or InvalidDataException)
                 {
                     it.Status = "Failed — " + ex.Message;
                     it.StatusKey = "Failed";
@@ -197,9 +243,9 @@ public sealed partial class RecoveryViewModel : ObservableObject
             }
             Progress = 1;
             RecoveryFolder = session.RecoveryFolder;
-            if (IsRestoreTab) _toast(ok == items.Count ? $"{ok} item{(ok == 1 ? "" : "s")} restored" : $"{ok} of {items.Count} restored — see the list for details");
+            if (restoreInPlace) _toast(ok == items.Count ? $"{ok} item{(ok == 1 ? "" : "s")} restored" : $"{ok} of {items.Count} restored — see the list for details");
             else _toast(ok == items.Count ? $"{ok} file{(ok == 1 ? "" : "s")} recovered ({Formatting.Size(bytes)}) in {sw.Elapsed.TotalSeconds:F0}s" : $"{ok} of {items.Count} recovered — see the list for details");
-            if (IsRestoreTab && ReferenceEquals(session, _session)) await RecycleBin.LoadAsync(session);
+            if (restoreInPlace && CurrentTab == RecoveryTab.RecycleBin && ReferenceEquals(session, _session)) await RecycleBin.LoadAsync(session);
         }
         finally
         {
@@ -225,7 +271,7 @@ public sealed partial class RecoveryViewModel : ObservableObject
         {
             using var w = new StreamWriter(dialog.FileName, false, new System.Text.UTF8Encoding(false));
             if (CurrentTab == RecoveryTab.Deleted && _session?.Log is { } log) CsvExport.WriteDeletions(w, log.Entries);
-            else CsvExport.WriteCandidates(w, (CurrentTab == RecoveryTab.RecycleBin ? RecycleBin.Items : Deleted.Items).Select(i => i.Candidate));
+            else CsvExport.WriteCandidates(w, CurrentItems.Select(i => i.Candidate));
             _toast("Exported ✓");
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { _toast("Export failed: " + ex.Message); }
@@ -251,6 +297,7 @@ public sealed partial class RecoveryViewModel : ObservableObject
     public void Deactivate()
     {
         Deleted.Cancel();
+        Undelete.Cancel();
         CloseSession();
     }
 }

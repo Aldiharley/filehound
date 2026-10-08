@@ -80,9 +80,14 @@ public sealed partial class MainViewModel : ObservableObject
 
     public void Initialize()
     {
+        Recovery.ScanStateChanged += (_, _) => UpdateStatus();
         OnCurrentPageChanged(CurrentPage);
         UpdateStatus();
     }
+
+    /// <summary>The header status chip: Drives normally, the Recovery page while an undelete scan runs.</summary>
+    [RelayCommand]
+    private void StatusClick() => CurrentPage = Recovery.IsScanning ? AppPage.Recovery : AppPage.Drives;
 
     [RelayCommand]
     private void Navigate(AppPage page) => CurrentPage = page;
@@ -118,7 +123,12 @@ public sealed partial class MainViewModel : ObservableObject
         var busy = drives.Where(d => d.Status is DriveStatus.Loading or DriveStatus.Scanning).ToList();
         int offline = drives.Count(d => d.Status == DriveStatus.Offline);
         int errors = drives.Count(d => d.Status == DriveStatus.Error);
-        if (busy.Count > 0)
+        if (Recovery.IsScanning)
+        {
+            StatusKind = "busy";
+            StatusText = $"Scanning for deleted files… {Recovery.ScanProgress:P0}";
+        }
+        else if (busy.Count > 0)
         {
             StatusKind = "busy";
             StatusText = $"Indexing… {busy.Average(d => d.Progress):P0}";

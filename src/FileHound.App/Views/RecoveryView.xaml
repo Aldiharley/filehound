@@ -130,6 +130,22 @@
                 <TextBlock Grid.Column="5" Text="CHANCES" FontSize="11" FontWeight="SemiBold" HorizontalAlignment="Right" />
             </Grid>
         </DataTemplate>
+        <DataTemplate x:Key="VersionHeader">
+            <Grid Margin="12,4,22,6" TextElement.Foreground="{StaticResource InkFaint}">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="36" />
+                    <ColumnDefinition Width="40" />
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="100" />
+                    <ColumnDefinition Width="130" />
+                    <ColumnDefinition Width="190" />
+                </Grid.ColumnDefinitions>
+                <TextBlock Grid.Column="2" Text="NAME" FontSize="11" FontWeight="SemiBold" />
+                <TextBlock Grid.Column="3" Text="SIZE" FontSize="11" FontWeight="SemiBold" HorizontalAlignment="Right" />
+                <TextBlock Grid.Column="4" Text="SNAPSHOT" FontSize="11" FontWeight="SemiBold" HorizontalAlignment="Right" />
+                <TextBlock Grid.Column="5" Text="CHANCES" FontSize="11" FontWeight="SemiBold" HorizontalAlignment="Right" />
+            </Grid>
+        </DataTemplate>
     </UserControl.Resources>
 
     <Grid Margin="8,4,0,0">
@@ -183,16 +199,24 @@
                                        ToolTip="Needs administrator access (Turbo)" Visibility="{Binding IsElevated, Converter={StaticResource VisibleWhen}, ConverterParameter=invert}" />
                         </StackPanel>
                     </RadioButton>
-                    <RadioButton Style="{StaticResource Chip}" GroupName="rtab" IsEnabled="False" Opacity="0.55" ToolTip="Coming in the next build">
+                    <RadioButton Style="{StaticResource Chip}" GroupName="rtab" Background="{StaticResource Lilac}"
+                                 IsChecked="{Binding CurrentTab, Converter={StaticResource EnumEquals}, ConverterParameter=PreviousVersions}" AutomationProperties.Name="Previous versions tab">
                         <StackPanel Orientation="Horizontal">
                             <Image Source="/Assets/icon-shadow.png" Width="20" Height="20" Margin="0,0,7,0" RenderOptions.BitmapScalingMode="HighQuality" />
                             <TextBlock Text="Previous versions" VerticalAlignment="Center" />
+                            <TextBlock Text="&#xE72E;" FontFamily="{StaticResource SymbolFont}" FontSize="12" Margin="7,0,0,0" VerticalAlignment="Center" Foreground="{StaticResource InkFaint}"
+                                       ToolTip="Needs administrator access (Turbo)" Visibility="{Binding IsElevated, Converter={StaticResource VisibleWhen}, ConverterParameter=invert}" />
                         </StackPanel>
                     </RadioButton>
-                    <RadioButton Style="{StaticResource Chip}" GroupName="rtab" IsEnabled="False" Opacity="0.55" ToolTip="Coming in the next build">
+                    <RadioButton Style="{StaticResource Chip}" GroupName="rtab" Background="{StaticResource Sky}"
+                                 IsChecked="{Binding CurrentTab, Converter={StaticResource EnumEquals}, ConverterParameter=Undelete}" AutomationProperties.Name="Undelete tab">
                         <StackPanel Orientation="Horizontal">
                             <Image Source="/Assets/icon-undelete.png" Width="20" Height="20" Margin="0,0,7,0" RenderOptions.BitmapScalingMode="HighQuality" />
                             <TextBlock Text="Undelete" VerticalAlignment="Center" />
+                            <TextBlock Text="{Binding Undelete.Count}" Margin="7,0,0,0" FontSize="12" Foreground="{StaticResource InkSoft}" VerticalAlignment="Center"
+                                       Visibility="{Binding Undelete.Count, Converter={StaticResource VisibleWhen}}" />
+                            <TextBlock Text="&#xE72E;" FontFamily="{StaticResource SymbolFont}" FontSize="12" Margin="7,0,0,0" VerticalAlignment="Center" Foreground="{StaticResource InkFaint}"
+                                       ToolTip="Needs administrator access (Turbo)" Visibility="{Binding IsElevated, Converter={StaticResource VisibleWhen}, ConverterParameter=invert}" />
                         </StackPanel>
                     </RadioButton>
                     <RadioButton Style="{StaticResource Chip}" GroupName="rtab" IsEnabled="False" Opacity="0.55" ToolTip="Coming in the next build">
@@ -376,6 +400,254 @@
                     </Grid>
                 </Grid>
 
+                <!-- Undelete tab -->
+                <Grid>
+                    <Grid.Style>
+                        <Style TargetType="Grid">
+                            <Setter Property="Visibility" Value="Collapsed" />
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding CurrentTab}" Value="Undelete"><Setter Property="Visibility" Value="Visible" /></DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </Grid.Style>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="*" />
+                    </Grid.RowDefinitions>
+
+                    <c:ClayCard Background="{StaticResource Peach}" CornerRadius="20" Padding="18,14" Margin="2,2,2,8"
+                                Visibility="{Binding Undelete.IsAvailable, Converter={StaticResource VisibleWhen}, ConverterParameter=invert}">
+                        <DockPanel>
+                            <Button DockPanel.Dock="Right" Style="{StaticResource ClayButton}" Content="Enable Turbo" Command="{Binding EnableTurboCommand}" VerticalAlignment="Center"
+                                    Visibility="{Binding IsElevated, Converter={StaticResource VisibleWhen}, ConverterParameter=invert}" />
+                            <Image Source="/Assets/icon-bolt.png" Width="48" Height="48" Margin="0,0,14,0" />
+                            <StackPanel VerticalAlignment="Center">
+                                <TextBlock Text="Needs administrator access" Style="{StaticResource Title}" />
+                                <TextBlock Style="{StaticResource Body}" Foreground="#7A4A36" TextWrapping="Wrap" Margin="0,4,16,0"
+                                           Text="Undelete reads the drive's master file table directly to find records of deleted files. Enable Turbo (one administrator approval) to scan." />
+                            </StackPanel>
+                        </DockPanel>
+                    </c:ClayCard>
+
+                    <DockPanel Grid.Row="1" Margin="4,4,4,8" Visibility="{Binding Undelete.IsAvailable, Converter={StaticResource VisibleWhen}}">
+                        <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" DataContext="{Binding Undelete}">
+                            <RadioButton Style="{StaticResource Chip}" GroupName="usort" Height="30" FontSize="12" Content="Best grade" Background="{StaticResource Mint}"
+                                         IsChecked="{Binding Sort, Converter={StaticResource EnumEquals}, ConverterParameter=BestGrade}" />
+                            <RadioButton Style="{StaticResource Chip}" GroupName="usort" Height="30" FontSize="12" Content="Newest" Background="{StaticResource Butter}"
+                                         IsChecked="{Binding Sort, Converter={StaticResource EnumEquals}, ConverterParameter=Newest}" />
+                            <RadioButton Style="{StaticResource Chip}" GroupName="usort" Height="30" FontSize="12" Content="Name" Background="{StaticResource Sky}"
+                                         IsChecked="{Binding Sort, Converter={StaticResource EnumEquals}, ConverterParameter=Name}" />
+                            <RadioButton Style="{StaticResource Chip}" GroupName="usort" Height="30" FontSize="12" Content="Size" Background="{StaticResource Lilac}" Margin="0,0,14,0"
+                                         IsChecked="{Binding Sort, Converter={StaticResource EnumEquals}, ConverterParameter=Size}" />
+                            <Button Style="{StaticResource SoftButton}" Command="{Binding DataContext.ExportCsvCommand, RelativeSource={RelativeSource AncestorType=UserControl}}" ToolTip="Export this list as CSV" Margin="0,0,8,0">
+                                <StackPanel Orientation="Horizontal">
+                                    <Image Source="/Assets/icon-export.png" Width="20" Height="20" Margin="0,0,6,0" RenderOptions.BitmapScalingMode="HighQuality" />
+                                    <TextBlock Text="CSV" VerticalAlignment="Center" />
+                                </StackPanel>
+                            </Button>
+                            <Button Style="{StaticResource SoftButton}" Content="DFXML" Command="{Binding DataContext.ExportDfxmlCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"
+                                    ToolTip="Export this recovery session as Digital Forensics XML" />
+                        </StackPanel>
+                        <StackPanel Orientation="Horizontal" DataContext="{Binding Undelete}">
+                            <Button Style="{StaticResource ClayButton}" Command="{Binding ScanCommand}" MinWidth="110" AutomationProperties.Name="{Binding ScanButtonText}">
+                                <StackPanel Orientation="Horizontal">
+                                    <Image Source="/Assets/hound-sniff.png" Width="24" Height="24" Margin="-4,0,8,0" RenderOptions.BitmapScalingMode="HighQuality"
+                                           Visibility="{Binding IsScanning, Converter={StaticResource VisibleWhen}}" />
+                                    <TextBlock VerticalAlignment="Center">
+                                        <TextBlock.Style>
+                                            <Style TargetType="TextBlock">
+                                                <Setter Property="Text" Value="{Binding ScanButtonText}" />
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding IsScanning}" Value="True"><Setter Property="Text" Value="Scanning…" /></DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </TextBlock.Style>
+                                    </TextBlock>
+                                </StackPanel>
+                            </Button>
+                            <Button Style="{StaticResource SoftButton}" Content="Stop" Command="{Binding ScanCancelCommand}" Margin="8,0,0,0"
+                                    Visibility="{Binding IsScanning, Converter={StaticResource VisibleWhen}}" />
+                            <Grid Width="260" Margin="14,0,0,0" Visibility="{Binding HasScanned, Converter={StaticResource VisibleWhen}}">
+                                <TextBox Style="{StaticResource ClayTextBox}" Text="{Binding Filter, UpdateSourceTrigger=PropertyChanged}"
+                                         PreviewKeyDown="Filter_PreviewKeyDown" AutomationProperties.Name="Filter deleted files" />
+                                <TextBlock Text="Filter by name or folder" Foreground="{StaticResource InkFaint}" FontSize="13" Margin="14,0,0,0" VerticalAlignment="Center" IsHitTestVisible="False"
+                                           Visibility="{Binding Filter, Converter={StaticResource VisibleWhen}, ConverterParameter=invert}" />
+                            </Grid>
+                            <TextBlock Text="{Binding ReadPathText}" Style="{StaticResource Caption}" FontSize="12" Margin="14,0,0,0" VerticalAlignment="Center"
+                                       Visibility="{Binding ReadPathText, Converter={StaticResource VisibleWhen}}" />
+                        </StackPanel>
+                    </DockPanel>
+
+                    <!-- progress / error / why -->
+                    <StackPanel Grid.Row="2" Margin="4,0,4,6" DataContext="{Binding Undelete}">
+                        <DockPanel Margin="0,0,0,8" Visibility="{Binding IsScanning, Converter={StaticResource VisibleWhen}}">
+                            <TextBlock DockPanel.Dock="Right" Text="{Binding ProgressText}" Style="{StaticResource Caption}" FontSize="12" Margin="12,0,0,0" VerticalAlignment="Center" />
+                            <ProgressBar Style="{StaticResource ClayProgress}" Maximum="1" Value="{Binding Progress, Mode=OneWay}" Foreground="{StaticResource SkyDeep}" Height="8" VerticalAlignment="Center"
+                                         AutomationProperties.Name="{Binding ProgressText}" />
+                        </DockPanel>
+                        <Border CornerRadius="12" Background="{StaticResource Rose}" Padding="12,8" Margin="0,0,0,8" Visibility="{Binding Error, Converter={StaticResource VisibleWhen}}">
+                            <TextBlock Text="{Binding Error}" Foreground="{StaticResource GradeRoseInk}" FontSize="12" FontWeight="SemiBold" TextWrapping="Wrap" />
+                        </Border>
+                        <ToggleButton Style="{StaticResource ToggleChip}" IsChecked="{Binding WhyExpanded}" HorizontalAlignment="Left" Height="28" FontSize="12">
+                            <StackPanel Orientation="Horizontal">
+                                <TextBlock Text="Why some files can't come back" VerticalAlignment="Center" />
+                                <TextBlock Text="&#xE70D;" FontFamily="{StaticResource SymbolFont}" FontSize="10" Margin="8,0,0,0" VerticalAlignment="Center" />
+                            </StackPanel>
+                        </ToggleButton>
+                        <Border CornerRadius="14" Background="{StaticResource SurfaceSunken}" Padding="14,10" Margin="0,8,0,0" Visibility="{Binding WhyExpanded, Converter={StaticResource VisibleWhen}}">
+                            <StackPanel TextElement.FontSize="12">
+                                <TextBlock TextWrapping="Wrap" Margin="0,0,0,4"><Run FontWeight="SemiBold" Text="Zeroed — " /><Run Text="On SSDs, Windows tells the drive to discard deleted data within seconds. If a file shows Zeroed, no copy of it exists on this drive." /></TextBlock>
+                                <TextBlock TextWrapping="Wrap" Margin="0,0,0,4"><Run FontWeight="SemiBold" Text="Record reused — " /><Run Text="Another file has taken the deleted file's record, so its name and location are gone; Deep scan (coming) can still find its contents by signature." /></TextBlock>
+                                <TextBlock TextWrapping="Wrap" Margin="0,0,0,4"><Run FontWeight="SemiBold" Text="Overwritten — " /><Run Text="Other files have been written over the space the deleted file used. Partially overwritten files come back with gaps." /></TextBlock>
+                                <TextBlock TextWrapping="Wrap"><Run FontWeight="SemiBold" Text="Encrypted — " /><Run Text="Files encrypted with EFS can't be decrypted outside the account that encrypted them." /></TextBlock>
+                            </StackPanel>
+                        </Border>
+                    </StackPanel>
+
+                    <ContentControl Grid.Row="3" ContentTemplate="{StaticResource ColumnHeader}" Content="{Binding}" Focusable="False"
+                                    Visibility="{Binding Undelete.HasScanned, Converter={StaticResource VisibleWhen}}" />
+                    <ListBox Grid.Row="4" ItemsSource="{Binding Undelete.Items}" ItemTemplate="{StaticResource CandidateRow}" ItemContainerStyle="{StaticResource RecoveryRow}"
+                             Background="Transparent" BorderThickness="0" SelectionMode="Extended"
+                             ScrollViewer.HorizontalScrollBarVisibility="Disabled" ScrollViewer.CanContentScroll="True"
+                             VirtualizingPanel.IsVirtualizing="True" VirtualizingPanel.VirtualizationMode="Recycling" VirtualizingPanel.ScrollUnit="Pixel"
+                             PreviewKeyDown="List_PreviewKeyDown" AutomationProperties.Name="Deleted files found by undelete">
+                        <ListBox.ContextMenu>
+                            <ContextMenu>
+                                <MenuItem Header="Copy original path" Command="{Binding Undelete.CopyOriginalPathCommand}"
+                                          CommandParameter="{Binding PlacementTarget.SelectedItem, RelativeSource={RelativeSource AncestorType=ContextMenu}}" Icon="&#xE8C8;" />
+                            </ContextMenu>
+                        </ListBox.ContextMenu>
+                    </ListBox>
+                    <StackPanel Grid.Row="3" Grid.RowSpan="2" VerticalAlignment="Center" HorizontalAlignment="Center">
+                        <StackPanel.Style>
+                            <Style TargetType="StackPanel">
+                                <Setter Property="Visibility" Value="Collapsed" />
+                                <Style.Triggers>
+                                    <MultiDataTrigger>
+                                        <MultiDataTrigger.Conditions>
+                                            <Condition Binding="{Binding Undelete.IsAvailable}" Value="True" />
+                                            <Condition Binding="{Binding Undelete.HasScanned}" Value="False" />
+                                            <Condition Binding="{Binding Undelete.IsScanning}" Value="False" />
+                                        </MultiDataTrigger.Conditions>
+                                        <Setter Property="Visibility" Value="Visible" />
+                                    </MultiDataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </StackPanel.Style>
+                        <Image Source="/Assets/hound-dig.png" Width="200" Height="200" RenderOptions.BitmapScalingMode="HighQuality" />
+                        <TextBlock Text="Ready to dig" Style="{StaticResource HeroTitle}" FontSize="22" HorizontalAlignment="Center" Margin="0,4,0,6" />
+                        <TextBlock Text="Scan reads the drive's master file table for records of deleted files. It takes a few seconds per million files." Style="{StaticResource Caption}" FontSize="13" HorizontalAlignment="Center" />
+                    </StackPanel>
+                    <StackPanel Grid.Row="3" Grid.RowSpan="2" VerticalAlignment="Center" HorizontalAlignment="Center"
+                                Visibility="{Binding Undelete.IsEmpty, Converter={StaticResource VisibleWhen}}">
+                        <Image Source="/Assets/hound-shrug.png" Width="200" Height="200" RenderOptions.BitmapScalingMode="HighQuality" />
+                        <TextBlock Text="No deleted records on this drive" Style="{StaticResource HeroTitle}" FontSize="22" HorizontalAlignment="Center" Margin="0,4,0,6" />
+                        <TextBlock Text="Every record in the master file table is in use. Try Previous versions if the drive has snapshots." Style="{StaticResource Caption}" FontSize="13" HorizontalAlignment="Center" />
+                    </StackPanel>
+                </Grid>
+
+                <!-- Previous versions tab -->
+                <Grid>
+                    <Grid.Style>
+                        <Style TargetType="Grid">
+                            <Setter Property="Visibility" Value="Collapsed" />
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding CurrentTab}" Value="PreviousVersions"><Setter Property="Visibility" Value="Visible" /></DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </Grid.Style>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="*" />
+                    </Grid.RowDefinitions>
+
+                    <c:ClayCard Background="{StaticResource Peach}" CornerRadius="20" Padding="18,14" Margin="2,2,2,8"
+                                Visibility="{Binding Versions.IsAvailable, Converter={StaticResource VisibleWhen}, ConverterParameter=invert}">
+                        <DockPanel>
+                            <Button DockPanel.Dock="Right" Style="{StaticResource ClayButton}" Content="Enable Turbo" Command="{Binding EnableTurboCommand}" VerticalAlignment="Center"
+                                    Visibility="{Binding IsElevated, Converter={StaticResource VisibleWhen}, ConverterParameter=invert}" />
+                            <Image Source="/Assets/icon-bolt.png" Width="48" Height="48" Margin="0,0,14,0" />
+                            <StackPanel VerticalAlignment="Center">
+                                <TextBlock Text="Needs administrator access" Style="{StaticResource Title}" />
+                                <TextBlock Style="{StaticResource Body}" Foreground="#7A4A36" TextWrapping="Wrap" Margin="0,4,16,0"
+                                           Text="Previous versions come from Windows' shadow copies (restore points), which only an administrator can read. Enable Turbo to look." />
+                            </StackPanel>
+                        </DockPanel>
+                    </c:ClayCard>
+
+                    <DockPanel Grid.Row="1" Margin="4,4,4,8" DataContext="{Binding Versions}" Visibility="{Binding IsAvailable, Converter={StaticResource VisibleWhen}}">
+                        <Button DockPanel.Dock="Right" Style="{StaticResource SoftButton}" Command="{Binding FreezeCommand}" Margin="14,0,0,0"
+                                ToolTip="Creates a snapshot of this drive now (writes a small amount of data to it)">
+                            <StackPanel Orientation="Horizontal">
+                                <Image Source="/Assets/icon-shadow.png" Width="20" Height="20" Margin="0,0,6,0" RenderOptions.BitmapScalingMode="HighQuality" />
+                                <TextBlock Text="Freeze this drive now" VerticalAlignment="Center" />
+                            </StackPanel>
+                        </Button>
+                        <Button DockPanel.Dock="Right" Style="{StaticResource ClayButton}" Content="Look up" Command="{Binding LookupCommand}" Margin="10,0,0,0" MinWidth="100" />
+                        <Grid>
+                            <TextBox Style="{StaticResource ClayTextBox}" Text="{Binding Path, UpdateSourceTrigger=PropertyChanged}" PreviewKeyDown="VersionsPath_PreviewKeyDown"
+                                     AutomationProperties.Name="Path to look up in snapshots" />
+                            <TextBlock Text="Type or paste a file or folder path on this drive…" Foreground="{StaticResource InkFaint}" FontSize="13" Margin="14,0,0,0" VerticalAlignment="Center" IsHitTestVisible="False"
+                                       Visibility="{Binding Path, Converter={StaticResource VisibleWhen}, ConverterParameter=invert}" />
+                        </Grid>
+                    </DockPanel>
+                    <StackPanel Grid.Row="2" Margin="6,0,4,8" DataContext="{Binding Versions}" Visibility="{Binding IsAvailable, Converter={StaticResource VisibleWhen}}">
+                        <TextBlock Text="{Binding SnapshotsText}" Style="{StaticResource Caption}" FontSize="12" />
+                        <Border CornerRadius="12" Background="{StaticResource Rose}" Padding="12,8" Margin="0,8,0,0" Visibility="{Binding Error, Converter={StaticResource VisibleWhen}}">
+                            <TextBlock Text="{Binding Error}" Foreground="{StaticResource GradeRoseInk}" FontSize="12" FontWeight="SemiBold" TextWrapping="Wrap" />
+                        </Border>
+                    </StackPanel>
+
+                    <ContentControl Grid.Row="3" ContentTemplate="{StaticResource VersionHeader}" Content="{Binding}" Focusable="False"
+                                    Visibility="{Binding Versions.Count, Converter={StaticResource VisibleWhen}}" />
+                    <ListBox Grid.Row="4" ItemsSource="{Binding Versions.Items}" ItemTemplate="{StaticResource CandidateRow}" ItemContainerStyle="{StaticResource RecoveryRow}"
+                             Background="Transparent" BorderThickness="0" SelectionMode="Extended"
+                             ScrollViewer.HorizontalScrollBarVisibility="Disabled" ScrollViewer.CanContentScroll="True"
+                             PreviewKeyDown="List_PreviewKeyDown" AutomationProperties.Name="Previous versions" />
+                    <StackPanel Grid.Row="3" Grid.RowSpan="2" VerticalAlignment="Center" HorizontalAlignment="Center">
+                        <StackPanel.Style>
+                            <Style TargetType="StackPanel">
+                                <Setter Property="Visibility" Value="Collapsed" />
+                                <Style.Triggers>
+                                    <MultiDataTrigger>
+                                        <MultiDataTrigger.Conditions>
+                                            <Condition Binding="{Binding Versions.IsAvailable}" Value="True" />
+                                            <Condition Binding="{Binding Versions.HasLookedUp}" Value="False" />
+                                        </MultiDataTrigger.Conditions>
+                                        <Setter Property="Visibility" Value="Visible" />
+                                    </MultiDataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </StackPanel.Style>
+                        <Image Source="/Assets/hound-dig.png" Width="200" Height="200" RenderOptions.BitmapScalingMode="HighQuality" />
+                        <TextBlock Text="Which file do you want an older copy of?" Style="{StaticResource HeroTitle}" FontSize="22" HorizontalAlignment="Center" Margin="0,4,0,6" />
+                        <TextBlock FontSize="13" HorizontalAlignment="Center" TextAlignment="Center" TextWrapping="Wrap" MaxWidth="520">
+                            <TextBlock.Style>
+                                <Style TargetType="TextBlock" BasedOn="{StaticResource Caption}">
+                                    <Setter Property="Text" Value="Paste its path above. Every snapshot that still holds it is listed, newest first." />
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding Versions.HasSnapshots}" Value="False">
+                                            <Setter Property="Text" Value="Windows creates snapshots when System Protection is on; FileHound never turns that on for you. Freeze this drive now makes one snapshot on demand." />
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </TextBlock.Style>
+                        </TextBlock>
+                    </StackPanel>
+                    <StackPanel Grid.Row="3" Grid.RowSpan="2" VerticalAlignment="Center" HorizontalAlignment="Center"
+                                Visibility="{Binding Versions.IsEmpty, Converter={StaticResource VisibleWhen}}">
+                        <Image Source="/Assets/hound-shrug.png" Width="200" Height="200" RenderOptions.BitmapScalingMode="HighQuality" />
+                        <TextBlock Text="No snapshot holds this path" Style="{StaticResource HeroTitle}" FontSize="22" HorizontalAlignment="Center" Margin="0,4,0,6" />
+                        <TextBlock Text="Check the spelling, or try the folder that contained it." Style="{StaticResource Caption}" FontSize="13" HorizontalAlignment="Center" />
+                    </StackPanel>
+                </Grid>
+
                 <!-- loading overlay -->
                 <Border CornerRadius="20" Background="#80FFFBF5" IsHitTestVisible="False">
                     <Border.Style>
@@ -405,17 +677,45 @@
                 <DockPanel>
                     <Button DockPanel.Dock="Right" Style="{StaticResource ClayButton}" Content="{Binding RecoverButtonText}" Command="{Binding RecoverCommand}" IsEnabled="{Binding CanRecover}"
                             MinWidth="140" VerticalAlignment="Center" AutomationProperties.Name="{Binding RecoverButtonText}" />
+                    <Button DockPanel.Dock="Right" Style="{StaticResource SoftButton}" Content="Save to a folder…" Command="{Binding SaveElsewhereCommand}" IsEnabled="{Binding CanSaveElsewhere}" Margin="0,0,10,0" VerticalAlignment="Center"
+                            ToolTip="Copy the selected items to a folder of your choice instead of restoring in place"
+                            Visibility="{Binding IsRestoreTab, Converter={StaticResource VisibleWhen}}" />
                     <Button DockPanel.Dock="Right" Style="{StaticResource LinkButton}" Content="Open recovery folder" Command="{Binding OpenRecoveryFolderCommand}" Margin="0,0,16,0" VerticalAlignment="Center"
                             Visibility="{Binding RecoveryFolder, Converter={StaticResource VisibleWhen}}" />
                     <TextBlock DockPanel.Dock="Right" Text="{Binding SelectedSummary}" Style="{StaticResource BodyStrong}" FontSize="13" Margin="0,0,16,0" VerticalAlignment="Center"
                                Visibility="{Binding SelectedSummary, Converter={StaticResource VisibleWhen}}" />
+                    <TextBlock DockPanel.Dock="Right" Text="{Binding Undelete.EstimatedIntactText}" Style="{StaticResource Caption}" FontSize="12" Foreground="{StaticResource GradeMintInk}" Margin="0,0,16,0" VerticalAlignment="Center"
+                               Visibility="{Binding Undelete.EstimatedIntactText, Converter={StaticResource VisibleWhen}}" />
 
-                    <!-- Restore tab: in place -->
-                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Visibility="{Binding IsRestoreTab, Converter={StaticResource VisibleWhen}}">
+                    <!-- Restore tabs: in place -->
+                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                        <StackPanel.Style>
+                            <Style TargetType="StackPanel">
+                                <Setter Property="Visibility" Value="Collapsed" />
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding CurrentTab}" Value="RecycleBin"><Setter Property="Visibility" Value="Visible" /></DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </StackPanel.Style>
                         <Image Source="/Assets/icon-recycle.png" Width="34" Height="34" Margin="0,0,10,0" RenderOptions.BitmapScalingMode="HighQuality" />
                         <StackPanel VerticalAlignment="Center">
                             <TextBlock Text="Restore puts items back in their original folder" Style="{StaticResource BodyStrong}" />
                             <TextBlock Text="If a file with the same name exists there, the restored copy gets “(restored)” added to its name." Style="{StaticResource Caption}" Foreground="{StaticResource GradeMintInk}" />
+                        </StackPanel>
+                    </StackPanel>
+                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                        <StackPanel.Style>
+                            <Style TargetType="StackPanel">
+                                <Setter Property="Visibility" Value="Collapsed" />
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding CurrentTab}" Value="PreviousVersions"><Setter Property="Visibility" Value="Visible" /></DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </StackPanel.Style>
+                        <Image Source="/Assets/icon-shadow.png" Width="34" Height="34" Margin="0,0,10,0" RenderOptions.BitmapScalingMode="HighQuality" />
+                        <StackPanel VerticalAlignment="Center">
+                            <TextBlock Text="Restore puts the older copy next to the current file" Style="{StaticResource BodyStrong}" />
+                            <TextBlock Text="It is named “name (from date)” so nothing is overwritten." Style="{StaticResource Caption}" Foreground="{StaticResource GradeMintInk}" />
                         </StackPanel>
                     </StackPanel>
 

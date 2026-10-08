@@ -132,7 +132,7 @@
                          Text="{Binding HeaderQuery, UpdateSourceTrigger=PropertyChanged}"
                          AutomationProperties.Name="Search files and folders" />
 
-                <Button Grid.Column="2" Command="{Binding NavigateCommand}" CommandParameter="{x:Static vm:AppPage.Drives}" Cursor="Hand"
+                <Button Grid.Column="2" Command="{Binding StatusClickCommand}" Cursor="Hand"
                         WindowChrome.IsHitTestVisibleInChrome="True" Focusable="False" ToolTip="Drive and index status">
                     <Button.Template>
                         <ControlTemplate TargetType="Button">

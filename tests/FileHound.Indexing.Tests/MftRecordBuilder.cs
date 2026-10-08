@@ -27,6 +27,13 @@ internal sealed class MftRecordBuilder(int size = 1024)
         return this;
     }
 
+    /// <summary>Marks the record as a directory without putting it in use (a deleted folder).</summary>
+    public MftRecordBuilder Directory()
+    {
+        _flags |= 0x2;
+        return this;
+    }
+
     public MftRecordBuilder Extension(long baseRecord)
     {
         _baseRecord = baseRecord | (1L << 48); // sequence number in the high 16 bits, like real FRNs

@@ -14,6 +14,8 @@
     Run the test suite after building.
 .PARAMETER Publish
     Publish the self-contained FileHound.exe to .\publish.
+.PARAMETER Installer
+    Build the Windows installer (release\FileHound-Setup-v<version>.exe) from a framework-dependent publish; needs Inno Setup 6.
 .PARAMETER Install
     Copy the published exe to %LOCALAPPDATA%\Programs\FileHound and create a Start Menu shortcut (implies -Publish).
 .PARAMETER NoInstallSdk
@@ -28,6 +30,7 @@ param(
     [switch]$Test,
     [switch]$Publish,
     [switch]$Install,
+    [switch]$Installer,
     [switch]$NoInstallSdk
 )
 
@@ -126,6 +129,20 @@ try {
         Write-Step 'dotnet publish src/FileHound.App (self-contained single file) -> .\publish'
         dotnet publish src/FileHound.App -c Release -r win-x64 --self-contained -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -o publish --nologo
         if ($LASTEXITCODE -ne 0) { throw 'Publish failed' }
+    }
+
+    if ($Installer) {
+        # The installer ships the small framework-dependent build and installs the .NET 10 Desktop Runtime when missing.
+        Write-Step 'dotnet publish src/FileHound.App (framework-dependent) -> .\publish-fdd'
+        dotnet publish src/FileHound.App -c Release -r win-x64 --self-contained false -o publish-fdd --nologo
+        if ($LASTEXITCODE -ne 0) { throw 'Publish (framework-dependent) failed' }
+        $iscc = @("${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe", "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe") | Where-Object { Test-Path $_ } | Select-Object -First 1
+        if (-not $iscc) { throw 'Inno Setup 6 is not installed (winget install JRSoftware.InnoSetup)' }
+        $version = ([xml](Get-Content Directory.Build.props -Raw)).Project.PropertyGroup.Version
+        Write-Step "ISCC installer\FileHound.iss (version $version) -> .\release"
+        & $iscc /Q "/DVersion=$version" '/DPublishDir=..\publish-fdd' installer\FileHound.iss
+        if ($LASTEXITCODE -ne 0) { throw 'Installer build failed' }
+        Write-Host "    release\FileHound-Setup-v$version.exe"
     }
 
     if ($Install) {

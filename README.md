@@ -28,9 +28,19 @@ FileHound indexes every file and folder on all your local drives (C:, D:, E:, US
 
 ## Install
 
-1. Download `FileHound.exe` from the [latest release](https://github.com/Aldiharley/filehound/releases/latest). It is self-contained: no .NET install is needed.
-2. Put it anywhere you like (for example `%LOCALAPPDATA%\Programs\FileHound`) and run it. Windows SmartScreen may warn the first time because the file is not code-signed; choose **More info → Run anyway**.
-3. Press **Ctrl+Alt+Space** to search. If another app already uses that shortcut, FileHound picks the first free one instead (usually **Ctrl+Shift+Space**). **Settings → Global hotkey** shows which one is active and lets you change it. Turn on **Start with Windows** in Settings so the hotkey is always ready.
+Two downloads on the [latest release](https://github.com/Aldiharley/filehound/releases/latest):
+
+| | Installer `FileHound-Setup-v<version>.exe` | Portable `FileHound.exe` |
+|---|---|---|
+| What it does | Installs to `%LOCALAPPDATA%\Programs\FileHound` (or Program Files for all users) with a Start Menu entry, optional desktop shortcut and *Start with Windows*; uninstall from Settings → Apps | Runs from wherever you put it (for example `%LOCALAPPDATA%\Programs\FileHound`) |
+| .NET | Checks for the **.NET 10 Desktop Runtime** and, if it is missing, downloads it from Microsoft (~60 MB) and installs it before FileHound | Not needed: the exe carries its own runtime |
+| Size | ~5 MB (+ runtime when needed) | ~140 MB |
+| Needs admin | No for a per-user install; the runtime installer asks once if it has to run | No |
+
+Either way:
+
+1. Windows SmartScreen may warn the first time because the files are not code-signed; choose **More info → Run anyway**.
+2. Press **Ctrl+Alt+Space** to search. If another app already uses that shortcut, FileHound picks the first free one instead (usually **Ctrl+Shift+Space**). **Settings → Global hotkey** shows which one is active and lets you change it. Turn on **Start with Windows** in Settings so the hotkey is always ready.
 
 FileHound greets you by your Windows display name. Change it, or clear it to go back to automatic, under **Settings → General → Your name**.
 
@@ -40,7 +50,9 @@ To check a download, compare its hash with `SHA256SUMS.txt` from the same releas
 Get-FileHash .\FileHound.exe -Algorithm SHA256
 ```
 
-Data lives in `%LOCALAPPDATA%\FileHound`: `settings.json`, the `index\*.fhx` snapshots, and `logs\`. To uninstall, exit FileHound from the tray, delete the exe and that folder, and turn off **Start with Windows** first if you had enabled it.
+Data lives in `%LOCALAPPDATA%\FileHound`: `settings.json`, the `index\*.fhx` snapshots, `recovery\*.dlog` deletion logs, and `logs\`. The installer's uninstaller removes the program, the shortcuts, the start-with-Windows entry and the rebuildable `index\` and `logs\` folders, and keeps `settings.json` and the deletion logs for a reinstall (delete the folder to remove everything). For the portable exe: exit FileHound from the tray, delete the exe and that folder, and turn off **Start with Windows** first if you had enabled it.
+
+Building the installer yourself needs [Inno Setup 6](https://jrsoftware.org/isinfo.php) (`winget install JRSoftware.InnoSetup`), then `.\build.ps1 -Installer`; the script is [`installer/FileHound.iss`](installer/FileHound.iss).
 
 ## Indexing modes
 
@@ -192,6 +204,10 @@ tools/FileHound.Cli  headless scan / search / bench / recovery-probe
 Design docs live in [`docs/superpowers/specs`](docs/superpowers/specs), the implementation plan in [`docs/superpowers/plans`](docs/superpowers/plans), and background research in [`docs/research`](docs/research).
 
 ## Changelog
+
+### 1.4.1
+
+- **Windows installer.** `FileHound-Setup-v<version>.exe` installs FileHound per user (or for all users) with a Start Menu entry, optional desktop shortcut and *Start with Windows*, and uninstalls from Settings → Apps. It ships the small framework-dependent build; when the .NET 10 Desktop Runtime is missing it downloads Microsoft's installer (~60 MB) and runs it first. The portable self-contained `FileHound.exe` is unchanged. Build it yourself with `.uild.ps1 -Installer` (Inno Setup 6).
 
 ### 1.4.0
 

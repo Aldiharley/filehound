@@ -61,11 +61,23 @@ jobs:
       - name: Publish self-contained single file
         run: dotnet publish src/FileHound.App -c Release -r win-x64 --self-contained -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -o publish
 
+      - name: Publish framework-dependent build for the installer
+        run: dotnet publish src/FileHound.App -c Release -r win-x64 --self-contained false -o publish-fdd
+
+      - name: Build the installer (Inno Setup, preinstalled on the Windows runner)
+        shell: pwsh
+        run: |
+          $v = "${{ steps.ver.outputs.version }}"
+          New-Item -ItemType Directory release -Force | Out-Null
+          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" /Q "/DVersion=$v" "/DPublishDir=..\publish-fdd" installer\FileHound.iss
+          if ($LASTEXITCODE -ne 0) { throw "ISCC failed ($LASTEXITCODE)" }
+          Get-Item "release/FileHound-Setup-v$v.exe" | Select-Object Name, Length
+
       - name: Package
         shell: pwsh
         run: |
           $v = "${{ steps.ver.outputs.version }}"
-          New-Item -ItemType Directory release | Out-Null
+          New-Item -ItemType Directory release -Force | Out-Null
           Copy-Item publish/FileHound.exe release/
           Compress-Archive -Path publish/FileHound.exe -DestinationPath "release/FileHound-v$v-win-x64.zip" -CompressionLevel Optimal
           Get-ChildItem release -File | ForEach-Object { "{0}  {1}" -f (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower(), $_.Name } |
@@ -81,7 +93,7 @@ jobs:
           $m = [regex]::Match($readme, "(?ms)^### $([regex]::Escape($v))[ \t]*\r?\n(.*?)(?=^### |^## |\z)")
           $changes = if ($m.Success) { $m.Groups[1].Value.Trim() } else { "_No changelog entry for $v in README.md._" }
           $lines = @(
-            "Fast, friendly file finding for every drive on Windows 11. ``FileHound.exe`` is self-contained: download, run, press **Ctrl+Alt+Space** (if another app already uses it, FileHound picks a free shortcut such as **Ctrl+Shift+Space**; **Settings → Global hotkey** shows which). No .NET install needed. Windows SmartScreen may warn the first time because the file is not code-signed (More info → Run anyway).",
+            "Fast, friendly file finding for every drive on Windows 11, plus deleted-file recovery. **``FileHound-Setup-v$v.exe``** installs it (and the .NET 10 Desktop Runtime if your PC lacks it); **``FileHound.exe``** is the portable self-contained build: download, run, no install. Press **Ctrl+Alt+Space** to search (if another app already uses it, FileHound picks a free shortcut such as **Ctrl+Shift+Space**; **Settings → Global hotkey** shows which). Windows SmartScreen may warn the first time because the files are not code-signed (More info → Run anyway).",
             "",
             "## What's new in $v",
             "",
@@ -91,7 +103,8 @@ jobs:
             "",
             "| File | Use |",
             "|---|---|",
-            "| ``FileHound.exe`` | The app. Put it anywhere and run it. |",
+            "| ``FileHound-Setup-v$v.exe`` | Installer: Program Files, Start Menu, optional desktop shortcut and start-with-Windows; downloads the .NET 10 Desktop Runtime when it is missing. |",
+            "| ``FileHound.exe`` | Portable self-contained app. Put it anywhere and run it; no .NET needed. |",
             "| ``FileHound-v$v-win-x64.zip`` | The same exe, zipped. |",
             "| ``SHA256SUMS.txt`` | Checksums: ``Get-FileHash .\FileHound.exe -Algorithm SHA256`` |"
           )
@@ -113,7 +126,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           $v = "${{ steps.ver.outputs.version }}"
-          $files = @("release/FileHound.exe", "release/FileHound-v$v-win-x64.zip", "release/SHA256SUMS.txt")
+          $files = @("release/FileHound-Setup-v$v.exe", "release/FileHound.exe", "release/FileHound-v$v-win-x64.zip", "release/SHA256SUMS.txt")
           if ("${{ github.ref_type }}" -ne 'tag') {
             # Manual dry run: a draft creates no tag and is invisible to users; delete it once checked.
             $tag = "v$v-ci-${{ github.run_number }}"

@@ -12,5 +12,6 @@
   <ItemGroup>
     <Using Include="Xunit" />
     <ProjectReference Include="..\..\src\FileHound.App\FileHound.App.csproj" />
+    <ProjectReference Include="..\FileHound.Core.Tests\FileHound.Core.Tests.csproj" />
   </ItemGroup>
 </Project>

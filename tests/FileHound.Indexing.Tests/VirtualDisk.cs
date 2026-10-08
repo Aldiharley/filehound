@@ -1,4 +1,6 @@
 using System.Diagnostics;
+using System.Runtime.InteropServices;
+using Microsoft.Win32.SafeHandles;
 
 namespace FileHound.Indexing.Tests;
 
@@ -18,6 +20,19 @@ internal sealed class VirtualDisk : IDisposable
 
     public char Letter { get; }
     public string Root => $@"{Letter}:\";
+
+    [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+    private static extern SafeFileHandle CreateFileW(string name, uint access, uint share, nint sa, uint disposition, uint flags, nint template);
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool FlushFileBuffers(SafeFileHandle h);
+
+    /// <summary>Forces NTFS to write its cached metadata ($MFT, $Bitmap) so raw reads see the current state. Test-only write access.</summary>
+    public void FlushMetadata()
+    {
+        using var h = CreateFileW($@"\.\{Letter}:", 0x80000000 | 0x40000000, 0x3, 0, 3, 0x02000000, 0);
+        if (!h.IsInvalid) FlushFileBuffers(h);
+        Thread.Sleep(500);
+    }
 
     /// <summary>Creates, attaches, partitions and formats a 256 MB VHDX; null (with the reason in <paramref name="reason"/>) when diskpart cannot.</summary>
     public static VirtualDisk? Create(string vhdPath, out string reason)

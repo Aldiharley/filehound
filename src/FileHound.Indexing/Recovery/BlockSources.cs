@@ -59,7 +59,9 @@ internal sealed unsafe class HandleBlockSource : IBlockSource
         byte* buf = (byte*)NativeMemory.AlignedAlloc((nuint)dest.Length, Alignment);
         try
         {
-            Kernel32.ReadExactly(_handle, _baseOffset + volumeOffset, buf, dest.Length);
+            // Seek + read is two calls on one file pointer; the carver, thumbnails, previews and recovery share this
+            // handle from different threads, so the pair must not interleave.
+            lock (_handle) Kernel32.ReadExactly(_handle, _baseOffset + volumeOffset, buf, dest.Length);
             new ReadOnlySpan<byte>(buf, dest.Length).CopyTo(dest);
         }
         finally { NativeMemory.AlignedFree(buf); }
